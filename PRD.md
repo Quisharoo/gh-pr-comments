@@ -69,15 +69,15 @@ A single CLI command outputs every accessible PR comment in a unified, structure
 ## Functional Requirements
 | ID | Requirement | Priority | Status |
 |----|--------------|----------|---------|
-| FR1 | Auto-detect repo via `gh` | Must | [ ] |
-| FR2 | Support interactive PR picker via `fzf`, with numbered prompt fallback | Must | [ ] |
-| FR3 | Aggregate from all three REST endpoints | Must | [ ] |
-| FR4 | Tag bots via regex `copilot|compliance|security|dependabot|.*\[bot\]` | Must | [ ] |
-| FR5 | Output JSON (default), Markdown text (`--text` strips HTML), single-array JSON (`--flat`) | Must | [ ] |
-| FR6 | Optional `--save` flag for local persistence | Should | [ ] |
-| FR7 | Support `--strip-html` cleaning | Should | [ ] |
-| FR8 | Handle pagination for completeness | Must | [ ] |
-| FR9 | Exit clearly on missing auth or no PRs | Must | [ ] |
+| FR1 | Auto-detect repo via `gh` | Must | [x] |
+| FR2 | Support interactive PR picker via `fzf`, with numbered prompt fallback | Must | [x] |
+| FR3 | Aggregate from all three REST endpoints | Must | [x] |
+| FR4 | Tag bots via regex `copilot|compliance|security|dependabot|.*\[bot\]` | Must | [x] |
+| FR5 | Output JSON (default), Markdown text (`--text` strips HTML), single-array JSON (`--flat`) | Must | [x] |
+| FR6 | Optional `--save` flag for local persistence | Should | [x] |
+| FR7 | Support `--strip-html` cleaning | Should | [x] |
+| FR8 | Handle pagination for completeness | Must | [x] |
+| FR9 | Exit clearly on missing auth or no PRs | Must | [x] |
 | FR10 | Performance <2 s for 500 comments | Should | [ ] |
 
 ---
