@@ -21,6 +21,7 @@
 - `gh pr-comments --flat` for a single JSON array of comments
 - `gh pr-comments --text` for Markdown output with HTML stripped
 - `gh pr-comments --save` to write the JSON payload under `.pr-comments/`
+- `gh pr-comments --no-colour` (or `--no-color`) to disable ANSI styling; also respects the `NO_COLOR` environment variable
 
 ## Development
 - `go test ./...` to run unit tests

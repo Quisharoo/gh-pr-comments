@@ -235,13 +235,23 @@ func parseRepoFromRemote(remote string) string {
 	return ""
 }
 
-// SelectPullRequest chooses a PR using the numbered prompt flow.
-func SelectPullRequest(ctx context.Context, prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
-	_ = ctx
-	return selectWithPrompt(prs, in, out)
+// SelectPromptOptions toggles visual enhancements for the interactive prompt.
+type SelectPromptOptions struct {
+	Colorize bool
 }
 
-func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
+// SelectPullRequest chooses a PR using the numbered prompt flow.
+func SelectPullRequest(ctx context.Context, prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
+	return SelectPullRequestWithOptions(ctx, prs, in, out, SelectPromptOptions{})
+}
+
+// SelectPullRequestWithOptions chooses a PR with additional display options.
+func SelectPullRequestWithOptions(ctx context.Context, prs []*PullRequestSummary, in io.Reader, out io.Writer, opts SelectPromptOptions) (*PullRequestSummary, error) {
+	_ = ctx
+	return selectWithPrompt(prs, in, out, opts)
+}
+
+func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer, opts SelectPromptOptions) (*PullRequestSummary, error) {
 	if len(prs) == 0 {
 		return nil, errors.New("no pull requests available")
 	}
@@ -254,15 +264,26 @@ func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*
 		baseRef := valueOrFallback(strings.TrimSpace(pr.BaseRef), "?")
 		updated := formatUpdatedTimestamp(pr.Updated)
 		title := strings.TrimSpace(pr.Title)
-		fmt.Fprintf(out, "[%d] %s#%d - %s [%s%s%s] updated %s\n",
-			idx+1,
-			repoName,
-			pr.Number,
+
+		indexPart := fmt.Sprintf("[%d]", idx+1)
+		repoPart := repoName
+		numberPart := fmt.Sprintf("#%d", pr.Number)
+		branchPart := fmt.Sprintf("[%s%s%s]", headRef, arrow, baseRef)
+		updatedPart := fmt.Sprintf("updated %s", updated)
+
+		indexPart = applyStyle(opts.Colorize, ansiDim, indexPart)
+		repoPart = applyStyle(opts.Colorize, ansiCyan, repoPart)
+		numberPart = applyStyle(opts.Colorize, ansiYellow, numberPart)
+		branchPart = applyStyle(opts.Colorize, ansiMagenta, branchPart)
+		updatedPart = applyStyle(opts.Colorize, ansiDim, updatedPart)
+
+		fmt.Fprintf(out, "%s %s%s - %s %s %s\n",
+			indexPart,
+			repoPart,
+			numberPart,
 			title,
-			headRef,
-			arrow,
-			baseRef,
-			updated,
+			branchPart,
+			updatedPart,
 		)
 	}
 	fmt.Fprint(out, "Select by index, PR number, or owner/repo#number: ")

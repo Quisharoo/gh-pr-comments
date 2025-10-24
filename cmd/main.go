@@ -13,6 +13,7 @@ import (
 
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
 	"github.com/google/go-github/v61/github"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -31,6 +32,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	var text bool
 	var save bool
 	var stripHTML bool
+	var noColour bool
+	var noColor bool
 
 	fs.IntVar(&prNumber, "p", 0, "pull request number")
 	fs.IntVar(&prNumber, "pr", 0, "pull request number")
@@ -38,6 +41,8 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	fs.BoolVar(&text, "text", false, "render comments as Markdown")
 	fs.BoolVar(&save, "save", false, "persist output to .pr-comments/")
 	fs.BoolVar(&stripHTML, "strip-html", false, "strip HTML tags from comment bodies")
+	fs.BoolVar(&noColour, "no-colour", false, "disable coloured terminal output")
+	fs.BoolVar(&noColor, "no-color", false, "disable colored terminal output")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -50,6 +55,15 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if text {
 		stripHTML = true
 	}
+
+	if noColor {
+		noColour = true
+	}
+	if envNoColor := strings.TrimSpace(os.Getenv("NO_COLOR")); envNoColor != "" {
+		noColour = true
+	}
+
+	colorEnabled := !noColour && isTerminalWriter(out)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -194,7 +208,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 		}
 
-		prSummary, err = ghprcomments.SelectPullRequest(ctx, all, in, out)
+		prSummary, err = ghprcomments.SelectPullRequestWithOptions(ctx, all, in, out, ghprcomments.SelectPromptOptions{Colorize: colorEnabled})
 		if err != nil {
 			return fmt.Errorf("select pull request: %w", err)
 		}
@@ -244,7 +258,11 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("marshal JSON: %w", err)
 		}
-		if _, err := out.Write(payload); err != nil {
+		display := payload
+		if colorEnabled {
+			display = ghprcomments.ColouriseJSONComments(colorEnabled, payload)
+		}
+		if _, err := out.Write(display); err != nil {
 			return fmt.Errorf("write JSON: %w", err)
 		}
 		if len(payload) == 0 || payload[len(payload)-1] != '\n' {
@@ -274,4 +292,12 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	return nil
+}
+
+func isTerminalWriter(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(file.Fd()))
 }

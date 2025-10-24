@@ -2,6 +2,7 @@ package ghprcomments
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func TestSelectWithPromptRepoQualified(t *testing.T) {
 	input := strings.NewReader("octo/alpha#42\n")
 	var output bytes.Buffer
 
-	got, err := selectWithPrompt(prs, input, &output)
+	got, err := selectWithPrompt(prs, input, &output, SelectPromptOptions{})
 	if err != nil {
 		t.Fatalf("selectWithPrompt returned error: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestSelectWithPromptDuplicateNumbers(t *testing.T) {
 	input := strings.NewReader("7\n")
 	var output bytes.Buffer
 
-	if _, err := selectWithPrompt(prs, input, &output); err == nil {
+	if _, err := selectWithPrompt(prs, input, &output, SelectPromptOptions{}); err == nil {
 		t.Fatalf("selectWithPrompt should have returned an error for duplicate PR numbers")
 	}
 }
@@ -143,7 +144,7 @@ func TestSelectWithPromptFormattingSingleOwner(t *testing.T) {
 	input := strings.NewReader("1\n")
 	var output bytes.Buffer
 
-	if _, err := selectWithPrompt(prs, input, &output); err != nil {
+	if _, err := selectWithPrompt(prs, input, &output, SelectPromptOptions{}); err != nil {
 		t.Fatalf("selectWithPrompt returned error: %v", err)
 	}
 
@@ -184,7 +185,7 @@ func TestSelectWithPromptFormattingMultipleOwners(t *testing.T) {
 	input := strings.NewReader("1\n")
 	var output bytes.Buffer
 
-	if _, err := selectWithPrompt(prs, input, &output); err != nil {
+	if _, err := selectWithPrompt(prs, input, &output, SelectPromptOptions{}); err != nil {
 		t.Fatalf("selectWithPrompt returned error: %v", err)
 	}
 
@@ -196,5 +197,44 @@ func TestSelectWithPromptFormattingMultipleOwners(t *testing.T) {
 	expectedFirst := "[1] octo/alpha#1 - First [feature\u2192main] updated 2024-01-02 03:04Z"
 	if lines[0] != expectedFirst {
 		t.Fatalf("unexpected first line. want %q got %q", expectedFirst, lines[0])
+	}
+}
+
+func TestSelectWithPromptColourizedOutput(t *testing.T) {
+	prs := []*PullRequestSummary{
+		{
+			Number:    10,
+			Title:     "Colourful",
+			HeadRef:   "feature",
+			BaseRef:   "main",
+			RepoOwner: "octo",
+			RepoName:  "alpha",
+			Updated:   time.Date(2025, 10, 24, 12, 0, 0, 0, time.UTC),
+		},
+	}
+
+	input := strings.NewReader("1\n")
+	var output bytes.Buffer
+
+	if _, err := selectWithPrompt(prs, input, &output, SelectPromptOptions{Colorize: true}); err != nil {
+		t.Fatalf("selectWithPrompt returned error: %v", err)
+	}
+
+	includeOwner := shouldShowRepoOwner(prs)
+	repoDisplay := formatRepoDisplay(prs[0], includeOwner)
+
+	expectedLine := fmt.Sprintf("%s %s%s - %s %s %s\n",
+		applyStyle(true, ansiDim, "[1]"),
+		applyStyle(true, ansiCyan, repoDisplay),
+		applyStyle(true, ansiYellow, "#10"),
+		"Colourful",
+		applyStyle(true, ansiMagenta, "[feature\u2192main]"),
+		applyStyle(true, ansiDim, "updated 2025-10-24 12:00Z"),
+	)
+
+	expected := expectedLine + "Select by index, PR number, or owner/repo#number: "
+
+	if got := output.String(); got != expected {
+		t.Fatalf("unexpected coloured prompt output.\nwant: %q\n got: %q", expected, got)
 	}
 }
