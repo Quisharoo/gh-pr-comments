@@ -1,6 +1,9 @@
 package ghprcomments
 
 import (
+	"html"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -28,15 +31,15 @@ type PullRequestMetadata struct {
 // Comment represents an individual review unit.
 type Comment struct {
 	Type      string    `json:"type"`
-	ID        int64     `json:"id"`
+	ID        int64     `json:"-"`
 	Author    string    `json:"author"`
-	IsBot     bool      `json:"is_bot"`
+	IsBot     bool      `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
-	Path      string    `json:"path,omitempty"`
-	Line      *int      `json:"line,omitempty"`
-	State     string    `json:"state,omitempty"`
+	Path      string    `json:"-"`
+	Line      *int      `json:"-"`
+	State     string    `json:"-"`
 	BodyText  string    `json:"body_text"`
-	Permalink string    `json:"permalink,omitempty"`
+	Permalink string    `json:"permalink"`
 }
 
 // NormalizationOptions controls comment shaping.
@@ -53,15 +56,18 @@ func BuildOutput(pr *PullRequestSummary, payload commentPayload, opts Normalizat
 	comments := make([]Comment, 0, len(payload.issueComments)+len(payload.reviewComments)+len(payload.reviews))
 
 	for _, ic := range payload.issueComments {
-		comments = append(comments, normalizeIssueComment(ic, opts))
+		comment := normalizeIssueComment(ic, opts)
+		comments = append(comments, comment)
 	}
 
 	for _, rc := range payload.reviewComments {
-		comments = append(comments, normalizeReviewComment(rc, opts))
+		comment := normalizeReviewComment(rc, opts)
+		comments = append(comments, comment)
 	}
 
 	for _, review := range payload.reviews {
-		comments = append(comments, normalizeReview(review, opts))
+		comment := normalizeReview(review, opts)
+		comments = append(comments, comment)
 	}
 
 	sort.Slice(comments, func(i, j int) bool {
@@ -87,10 +93,7 @@ func BuildOutput(pr *PullRequestSummary, payload commentPayload, opts Normalizat
 }
 
 func normalizeIssueComment(c *github.IssueComment, opts NormalizationOptions) Comment {
-	body := c.GetBody()
-	if opts.StripHTML {
-		body = StripHTML(body)
-	}
+	body := cleanCommentBody(c.GetBody(), opts)
 
 	return Comment{
 		Type:      "issue",
@@ -104,10 +107,7 @@ func normalizeIssueComment(c *github.IssueComment, opts NormalizationOptions) Co
 }
 
 func normalizeReviewComment(c *github.PullRequestComment, opts NormalizationOptions) Comment {
-	body := c.GetBody()
-	if opts.StripHTML {
-		body = StripHTML(body)
-	}
+	body := cleanCommentBody(c.GetBody(), opts)
 
 	var linePtr *int
 	if c.Line != nil {
@@ -129,10 +129,7 @@ func normalizeReviewComment(c *github.PullRequestComment, opts NormalizationOpti
 }
 
 func normalizeReview(r *github.PullRequestReview, opts NormalizationOptions) Comment {
-	body := r.GetBody()
-	if opts.StripHTML {
-		body = StripHTML(body)
-	}
+	body := cleanCommentBody(r.GetBody(), opts)
 
 	return Comment{
 		Type:      "review_event",
@@ -161,4 +158,115 @@ func safeLogin(user *github.User) string {
 		return login
 	}
 	return user.GetName()
+}
+
+var (
+	detailsBlockRegex  = regexp.MustCompile(`(?is)<details.*?>.*?</details>`)
+	htmlCommentRegex   = regexp.MustCompile(`(?s)<!--.*?-->`)
+	codeFenceRegex     = regexp.MustCompile("(?s)```.*?```")
+	inlineCodeRegex    = regexp.MustCompile("`([^`]*)`")
+	imageMarkdownRegex = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	linkMarkdownRegex  = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	orderedListRegex   = regexp.MustCompile(`^\d+\.\s+`)
+	base64BlobRegex    = regexp.MustCompile(`\b[A-Za-z0-9+/]{40,}={0,2}\b`)
+	urlRegex           = regexp.MustCompile(`https?://[^\s)]+`)
+)
+
+func cleanCommentBody(body string, opts NormalizationOptions) string {
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+
+	// Always normalize to human-readable plain text regardless of incoming flags.
+	_ = opts // retained for future expansion and to preserve function signature
+
+	normalized := html.UnescapeString(body)
+	normalized = detailsBlockRegex.ReplaceAllString(normalized, " ")
+	normalized = htmlCommentRegex.ReplaceAllString(normalized, " ")
+	normalized = codeFenceRegex.ReplaceAllString(normalized, " ")
+
+	// Ensure residual HTML is removed before markdown cleanup.
+	normalized = StripHTML(normalized)
+
+	normalized = imageMarkdownRegex.ReplaceAllStringFunc(normalized, func(match string) string {
+		parts := imageMarkdownRegex.FindStringSubmatch(match)
+		alt := strings.TrimSpace(parts[1])
+		return alt
+	})
+
+	normalized = linkMarkdownRegex.ReplaceAllStringFunc(normalized, func(match string) string {
+		parts := linkMarkdownRegex.FindStringSubmatch(match)
+		label := strings.TrimSpace(parts[1])
+		if label != "" {
+			return label
+		}
+		host := hostFromURL(parts[2])
+		return host
+	})
+
+	normalized = inlineCodeRegex.ReplaceAllString(normalized, "$1")
+	normalized = strings.ReplaceAll(normalized, "\r\n", "\n")
+
+	lines := strings.Split(normalized, "\n")
+	cleanedLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "---" || line == "***" || line == "___" {
+			continue
+		}
+		if strings.Count(line, "|") >= 2 {
+			// Drop Markdown table rows entirely.
+			continue
+		}
+		for {
+			switch {
+			case strings.HasPrefix(line, "> "):
+				line = strings.TrimPrefix(line, "> ")
+			case strings.HasPrefix(line, "- "):
+				line = strings.TrimPrefix(line, "- ")
+			case strings.HasPrefix(line, "* "):
+				line = strings.TrimPrefix(line, "* ")
+			case strings.HasPrefix(line, "+ "):
+				line = strings.TrimPrefix(line, "+ ")
+			case strings.HasPrefix(line, "• "):
+				line = strings.TrimPrefix(line, "• ")
+			case strings.HasPrefix(line, "#"):
+				line = strings.TrimSpace(strings.TrimLeft(line, "#"))
+			default:
+				line = orderedListRegex.ReplaceAllString(line, "")
+				goto cleaned
+			}
+		}
+	cleaned:
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		cleanedLines = append(cleanedLines, line)
+	}
+
+	normalized = strings.Join(cleanedLines, " ")
+	normalized = urlRegex.ReplaceAllStringFunc(normalized, func(raw string) string {
+		host := hostFromURL(raw)
+		return host
+	})
+	normalized = base64BlobRegex.ReplaceAllString(normalized, " ")
+	normalized = strings.ReplaceAll(normalized, "\u00a0", " ")
+
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	return strings.TrimSpace(normalized)
+}
+
+func hostFromURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Host)
 }
