@@ -16,6 +16,7 @@
 
 ## Usage
 - `gh pr-comments` to pick a PR interactively and print JSON
+- Run `gh pr-comments` from a parent workspace with several git repos to browse every open PR across them
 - `gh pr-comments -p <number>` to target a specific pull request
 - `gh pr-comments --flat` for a single JSON array of comments
 - `gh pr-comments --text` for Markdown output with HTML stripped

@@ -1,7 +1,10 @@
 package ghprcomments
 
 import (
+	"bytes"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v61/github"
 )
@@ -61,5 +64,47 @@ func TestFormatCommentType(t *testing.T) {
 		if got := formatCommentType(input); got != want {
 			t.Fatalf("formatCommentType(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestSelectWithPromptRepoQualified(t *testing.T) {
+	prs := []*PullRequestSummary{
+		{
+			Number:    42,
+			Title:     "Test PR",
+			Author:    "dev1",
+			State:     "open",
+			Created:   time.Now(),
+			Updated:   time.Now(),
+			HeadRef:   "feature",
+			BaseRef:   "main",
+			RepoOwner: "octo",
+			RepoName:  "alpha",
+		},
+	}
+
+	input := strings.NewReader("octo/alpha#42\n")
+	var output bytes.Buffer
+
+	got, err := selectWithPrompt(prs, input, &output)
+	if err != nil {
+		t.Fatalf("selectWithPrompt returned error: %v", err)
+	}
+	if got != prs[0] {
+		t.Fatalf("selectWithPrompt returned unexpected PR: %+v", got)
+	}
+}
+
+func TestSelectWithPromptDuplicateNumbers(t *testing.T) {
+	prs := []*PullRequestSummary{
+		{Number: 7, RepoOwner: "octo", RepoName: "alpha", Updated: time.Now()},
+		{Number: 7, RepoOwner: "octo", RepoName: "beta", Updated: time.Now()},
+	}
+
+	input := strings.NewReader("7\n")
+	var output bytes.Buffer
+
+	if _, err := selectWithPrompt(prs, input, &output); err == nil {
+		t.Fatalf("selectWithPrompt should have returned an error for duplicate PR numbers")
 	}
 }

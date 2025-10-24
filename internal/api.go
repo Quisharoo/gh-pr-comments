@@ -10,6 +10,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// ErrNoPullRequests signals that no PRs were returned for a repository.
+var ErrNoPullRequests = errors.New("no pull requests found")
+
 // Fetcher bundles GitHub operations used by the CLI.
 type Fetcher struct {
 	client *github.Client
@@ -46,6 +49,7 @@ type PullRequestSummary struct {
 	BaseRef   string
 	RepoName  string
 	RepoOwner string
+	LocalPath string `json:"-"`
 }
 
 // commentPayload groups the raw GitHub responses.
@@ -85,7 +89,14 @@ func (f *Fetcher) GetPullRequestSummary(ctx context.Context, owner, repo string,
 	if err != nil {
 		return nil, err
 	}
-	return summarizePullRequest(pr), nil
+	summary := summarizePullRequest(pr)
+	if summary.RepoOwner == "" {
+		summary.RepoOwner = owner
+	}
+	if summary.RepoName == "" {
+		summary.RepoName = repo
+	}
+	return summary, nil
 }
 
 // ListPullRequestSummaries returns a set of pull requests for interactive selection.
@@ -107,7 +118,14 @@ func (f *Fetcher) ListPullRequestSummaries(ctx context.Context, owner, repo stri
 			return nil, err
 		}
 		for _, pr := range prs {
-			summaries = append(summaries, summarizePullRequest(pr))
+			summary := summarizePullRequest(pr)
+			if summary.RepoOwner == "" {
+				summary.RepoOwner = owner
+			}
+			if summary.RepoName == "" {
+				summary.RepoName = repo
+			}
+			summaries = append(summaries, summary)
 		}
 		if resp.NextPage == 0 || len(summaries) >= 200 {
 			break
@@ -116,7 +134,7 @@ func (f *Fetcher) ListPullRequestSummaries(ctx context.Context, owner, repo stri
 	}
 
 	if len(summaries) == 0 {
-		return nil, errors.New("no pull requests found")
+		return nil, ErrNoPullRequests
 	}
 
 	return summaries, nil
@@ -201,7 +219,6 @@ func summarizePullRequest(pr *github.PullRequest) *PullRequestSummary {
 	if pr.UpdatedAt != nil {
 		updated = pr.UpdatedAt.Time
 	}
-
 	created := time.Time{}
 	if pr.CreatedAt != nil {
 		created = pr.CreatedAt.Time

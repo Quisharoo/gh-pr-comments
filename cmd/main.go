@@ -12,6 +12,7 @@ import (
 	"time"
 
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
+	"github.com/google/go-github/v61/github"
 )
 
 func main() {
@@ -78,9 +79,12 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		return errors.New("GH_TOKEN or GITHUB_TOKEN not set; run `gh auth login`")
 	}
 
-	owner, repo, err := ghprcomments.DetectRepository(ctx)
+	repos, err := ghprcomments.DetectRepositories(ctx)
 	if err != nil {
-		return fmt.Errorf("detect repository: %w", err)
+		return fmt.Errorf("detect repositories: %w", err)
+	}
+	if len(repos) == 0 {
+		return errors.New("no repositories found; run inside or alongside a git repository")
 	}
 
 	client, err := ghprcomments.NewGitHubClient(ctx, token, host)
@@ -91,26 +95,125 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	fetcher := ghprcomments.NewFetcher(client)
 
 	var prSummary *ghprcomments.PullRequestSummary
+	var selectedRepo ghprcomments.Repository
+
+	repoLookup := make(map[string]ghprcomments.Repository)
+	repoKey := func(owner, name string) string {
+		owner = strings.ToLower(strings.TrimSpace(owner))
+		name = strings.ToLower(strings.TrimSpace(name))
+		if owner == "" {
+			return name
+		}
+		if name == "" {
+			return owner
+		}
+		return owner + "/" + name
+	}
+
+	for _, repo := range repos {
+		repoLookup[repoKey(repo.Owner, repo.Name)] = repo
+	}
 
 	if prNumber > 0 {
-		prSummary, err = fetcher.GetPullRequestSummary(ctx, owner, repo, prNumber)
-		if err != nil {
-			return fmt.Errorf("load pull request: %w", err)
+		if len(repos) == 1 {
+			selectedRepo = repos[0]
+			prSummary, err = fetcher.GetPullRequestSummary(ctx, selectedRepo.Owner, selectedRepo.Name, prNumber)
+			if err != nil {
+				return fmt.Errorf("load pull request: %w", err)
+			}
+			prSummary.LocalPath = selectedRepo.Path
+		} else {
+			matches := make([]*ghprcomments.PullRequestSummary, 0)
+			var errs []string
+			for _, repo := range repos {
+				summary, berr := fetcher.GetPullRequestSummary(ctx, repo.Owner, repo.Name, prNumber)
+				if berr != nil {
+					var ghErr *github.ErrorResponse
+					if errors.As(berr, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == 404 {
+						continue
+					}
+					errs = append(errs, fmt.Sprintf("%s/%s: %v", repo.Owner, repo.Name, berr))
+					continue
+				}
+				summary.LocalPath = repo.Path
+				matches = append(matches, summary)
+			}
+
+			if len(matches) == 0 {
+				if len(errs) > 0 {
+					return fmt.Errorf("load pull request #%d:\n%s", prNumber, strings.Join(errs, "\n"))
+				}
+				return fmt.Errorf("pull request #%d not found in discovered repositories", prNumber)
+			}
+			if len(matches) > 1 {
+				return fmt.Errorf("pull request #%d found in multiple repositories; re-run without --pr and select interactively", prNumber)
+			}
+			prSummary = matches[0]
+			selectedRepo = repoLookup[repoKey(prSummary.RepoOwner, prSummary.RepoName)]
+			if selectedRepo.Path == "" {
+				selectedRepo = ghprcomments.Repository{Owner: prSummary.RepoOwner, Name: prSummary.RepoName, Path: prSummary.LocalPath}
+			}
 		}
 	} else {
-		prs, err := fetcher.ListPullRequestSummaries(ctx, owner, repo)
-		if err != nil {
-			return fmt.Errorf("list pull requests: %w", err)
+		all := make([]*ghprcomments.PullRequestSummary, 0)
+		var errs []string
+		for _, repo := range repos {
+			prs, berr := fetcher.ListPullRequestSummaries(ctx, repo.Owner, repo.Name)
+			if berr != nil {
+				if errors.Is(berr, ghprcomments.ErrNoPullRequests) {
+					continue
+				}
+				errs = append(errs, fmt.Sprintf("%s/%s: %v", repo.Owner, repo.Name, berr))
+				continue
+			}
+			for _, pr := range prs {
+				if pr.RepoOwner == "" {
+					pr.RepoOwner = repo.Owner
+				}
+				if pr.RepoName == "" {
+					pr.RepoName = repo.Name
+				}
+				pr.LocalPath = repo.Path
+			}
+			all = append(all, prs...)
 		}
-		prSummary, err = ghprcomments.SelectPullRequest(ctx, prs, in, out)
+
+		if len(all) == 0 {
+			if len(errs) > 0 {
+				return fmt.Errorf("list pull requests:\n%s", strings.Join(errs, "\n"))
+			}
+			if len(repos) == 1 {
+				return ghprcomments.ErrNoPullRequests
+			}
+			return errors.New("no open pull requests found across discovered repositories")
+		}
+
+		if len(errs) > 0 {
+			for _, msg := range errs {
+				fmt.Fprintf(errOut, "warning: %s\n", msg)
+			}
+		}
+
+		prSummary, err = ghprcomments.SelectPullRequest(ctx, all, in, out)
 		if err != nil {
 			return fmt.Errorf("select pull request: %w", err)
+		}
+		selectedRepo = repoLookup[repoKey(prSummary.RepoOwner, prSummary.RepoName)]
+		if selectedRepo.Path == "" {
+			selectedRepo = ghprcomments.Repository{Owner: prSummary.RepoOwner, Name: prSummary.RepoName, Path: prSummary.LocalPath}
 		}
 		prNumber = prSummary.Number
 	}
 
 	if prSummary == nil {
 		return errors.New("no pull request selected")
+	}
+
+	owner := strings.TrimSpace(prSummary.RepoOwner)
+	repo := strings.TrimSpace(prSummary.RepoName)
+	if owner == "" || repo == "" {
+		owner = strings.TrimSpace(selectedRepo.Owner)
+		repo = strings.TrimSpace(selectedRepo.Name)
 	}
 
 	payloads, err := fetcher.FetchComments(ctx, owner, repo, prNumber)
@@ -153,9 +256,13 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	if save {
-		repoRoot, err := ghprcomments.FindRepoRoot(ctx)
-		if err != nil {
-			return fmt.Errorf("find repo root: %w", err)
+		repoRoot := strings.TrimSpace(selectedRepo.Path)
+		if repoRoot == "" {
+			var err error
+			repoRoot, err = ghprcomments.FindRepoRoot(ctx)
+			if err != nil {
+				return fmt.Errorf("find repo root: %w", err)
+			}
 		}
 		savePath, err := ghprcomments.SaveOutput(repoRoot, prSummary, rendered)
 		if err != nil {

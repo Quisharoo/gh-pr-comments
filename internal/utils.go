@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,19 +22,85 @@ import (
 var botRegex = regexp.MustCompile(`(?i)(copilot|compliance|security|dependabot|.*\[bot\])`)
 var htmlTagRegex = regexp.MustCompile(`(?s)<[^>]+>`)
 
+// Repository represents a local git repository and its remote metadata.
+type Repository struct {
+	Owner string
+	Name  string
+	Path  string
+}
+
+func (r Repository) fullName() string {
+	owner := strings.TrimSpace(r.Owner)
+	name := strings.TrimSpace(r.Name)
+	switch {
+	case owner == "" && name == "":
+		return ""
+	case owner == "":
+		return name
+	case name == "":
+		return owner
+	default:
+		return owner + "/" + name
+	}
+}
+
 // DetectRepository determines the owner/name pair for the current context.
 func DetectRepository(ctx context.Context) (string, string, error) {
+	repos, err := DetectRepositories(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if len(repos) == 0 {
+		return "", "", errors.New("no repositories found")
+	}
+	if len(repos) > 1 {
+		return "", "", errors.New("multiple repositories detected; use DetectRepositories")
+	}
+	return repos[0].Owner, repos[0].Name, nil
+}
+
+// DetectRepositories returns all repositories discoverable from the current directory.
+func DetectRepositories(ctx context.Context) ([]Repository, error) {
 	if repo := os.Getenv("GH_REPO"); repo != "" {
-		return splitRepo(repo)
+		owner, name, err := splitRepo(repo)
+		if err != nil {
+			return nil, err
+		}
+		root, _ := FindRepoRoot(ctx)
+		return []Repository{{Owner: owner, Name: name, Path: root}}, nil
 	}
 
 	if HasCommand("gh") {
 		if owner, repo, err := detectRepoViaGH(ctx); err == nil {
-			return owner, repo, nil
+			root, _ := FindRepoRoot(ctx)
+			return []Repository{{Owner: owner, Name: repo, Path: root}}, nil
 		}
 	}
 
-	return detectRepoViaGit(ctx)
+	if owner, repo, err := detectRepoViaGit(ctx); err == nil {
+		root, errRoot := FindRepoRoot(ctx)
+		if errRoot != nil {
+			root, _ = findRepoRootAt(ctx, ".")
+		}
+		return []Repository{{Owner: owner, Name: repo, Path: root}}, nil
+	}
+
+	repos, err := discoverNestedRepositories(ctx, ".")
+	if err != nil {
+		return nil, err
+	}
+	if len(repos) == 0 {
+		return nil, errors.New("unable to determine repository; run inside a git repo")
+	}
+	sort.Slice(repos, func(i, j int) bool {
+		a := repos[i].fullName()
+		b := repos[j].fullName()
+		if a == b {
+			return repos[i].Path < repos[j].Path
+		}
+		return a < b
+	})
+	return repos, nil
 }
 
 func detectRepoViaGH(ctx context.Context) (string, string, error) {
@@ -49,7 +116,11 @@ func detectRepoViaGH(ctx context.Context) (string, string, error) {
 }
 
 func detectRepoViaGit(ctx context.Context) (string, string, error) {
-	cmd := exec.CommandContext(ctx, "git", "config", "--get", "remote.origin.url")
+	return detectRepoViaGitAt(ctx, ".")
+}
+
+func detectRepoViaGitAt(ctx context.Context, path string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--get", "remote.origin.url")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.Discard
@@ -63,6 +134,76 @@ func detectRepoViaGit(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("could not parse repository from remote: %s", remote)
 	}
 	return splitRepo(repo)
+}
+
+func discoverNestedRepositories(ctx context.Context, root string) ([]Repository, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+
+	const maxDepth = 2
+	skipNames := map[string]struct{}{
+		".git":         {},
+		".hg":          {},
+		".svn":         {},
+		"node_modules": {},
+		"vendor":       {},
+		"__pycache__":  {},
+	}
+
+	type queueItem struct {
+		path  string
+		depth int
+	}
+
+	queue := []queueItem{{path: rootAbs, depth: 0}}
+	repos := make([]Repository, 0)
+	seenRoots := make(map[string]struct{})
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		entries, err := os.ReadDir(item.path)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			name := entry.Name()
+			if _, skip := skipNames[name]; skip {
+				continue
+			}
+
+			childPath := filepath.Join(item.path, name)
+
+			rootPath, err := findRepoRootAt(ctx, childPath)
+			if err == nil {
+				owner, repo, derr := detectRepoViaGitAt(ctx, rootPath)
+				if derr != nil {
+					continue
+				}
+				if _, seen := seenRoots[rootPath]; seen {
+					continue
+				}
+				seenRoots[rootPath] = struct{}{}
+				repos = append(repos, Repository{Owner: owner, Name: repo, Path: rootPath})
+				continue
+			}
+
+			if item.depth+1 > maxDepth {
+				continue
+			}
+			queue = append(queue, queueItem{path: childPath, depth: item.depth + 1})
+		}
+	}
+
+	return repos, nil
 }
 
 func splitRepo(repo string) (string, string, error) {
@@ -112,7 +253,11 @@ func SelectPullRequest(ctx context.Context, prs []*PullRequestSummary, in io.Rea
 func selectWithFZF(ctx context.Context, prs []*PullRequestSummary) (*PullRequestSummary, error) {
 	var input bytes.Buffer
 	for _, pr := range prs {
-		line := fmt.Sprintf("%s #%d (opened %s)\t@%s\tupdated %s", pr.Title, pr.Number, displayDate(pr.Created), pr.Author, pr.Updated.Format(time.RFC3339))
+		repoName := summaryRepoName(pr)
+		if repoName == "" {
+			repoName = "(unknown repo)"
+		}
+		line := fmt.Sprintf("%s #%d — %s\tstate %s\tupdated %s", repoName, pr.Number, pr.Title, valueOrFallback(strings.ToLower(pr.State), "unknown"), formatTimestamp(pr.Updated))
 		input.WriteString(line)
 		input.WriteByte('\n')
 	}
@@ -131,31 +276,86 @@ func selectWithFZF(ctx context.Context, prs []*PullRequestSummary) (*PullRequest
 		return nil, errors.New("no pull request selected")
 	}
 
-	fields := strings.Fields(selection)
-	if len(fields) == 0 {
+	repoPart, rest, found := strings.Cut(selection, "#")
+	if !found {
 		return nil, errors.New("unable to parse selection output")
 	}
-	numberStr := strings.TrimPrefix(fields[0], "#")
-	num, err := strconv.Atoi(numberStr)
+	repoPart = strings.TrimSpace(repoPart)
+	if repoPart == "" {
+		return nil, errors.New("unable to parse selection output")
+	}
+
+	numberDigits := make([]rune, 0, len(rest))
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			break
+		}
+		numberDigits = append(numberDigits, r)
+	}
+	if len(numberDigits) == 0 {
+		return nil, errors.New("unable to parse selection output")
+	}
+
+	num, err := strconv.Atoi(string(numberDigits))
 	if err != nil {
 		return nil, fmt.Errorf("invalid selection: %s", selection)
 	}
 
-	for _, pr := range prs {
-		if pr.Number == num {
-			return pr, nil
-		}
+	if match := findByRepoAndNumber(prs, repoPart, num); match != nil {
+		return match, nil
 	}
 
+	matches := make([]*PullRequestSummary, 0)
+	for _, pr := range prs {
+		if pr.Number == num {
+			matches = append(matches, pr)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("selected PR #%d is present in multiple repositories; specify owner/repo in the prompt", num)
+	}
 	return nil, fmt.Errorf("selected PR #%d not found", num)
 }
 
 func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
 	fmt.Fprintln(out, "Available pull requests:")
 	for idx, pr := range prs {
-		fmt.Fprintf(out, "[%d] %s #%d (opened %s) — by @%s, updated %s\n", idx+1, pr.Title, pr.Number, displayDate(pr.Created), pr.Author, pr.Updated.Format(time.RFC3339))
+		repoName := summaryRepoName(pr)
+		if repoName == "" {
+			repoName = "(unknown repo)"
+		}
+		state := pr.State
+		if state == "" {
+			state = "unknown"
+		}
+
+		headRef := pr.HeadRef
+		if headRef == "" {
+			headRef = "?"
+		}
+
+		baseRef := pr.BaseRef
+		if baseRef == "" {
+			baseRef = "?"
+		}
+
+		fmt.Fprintf(out, "[%d] %s #%d — %s (%s) [%s -> %s]; opened %s; author @%s; updated %s\n",
+			idx+1,
+			repoName,
+			pr.Number,
+			pr.Title,
+			state,
+			headRef,
+			baseRef,
+			displayDate(pr.Created),
+			valueOrFallback(pr.Author, "unknown"),
+			formatTimestamp(pr.Updated),
+		)
 	}
-	fmt.Fprint(out, "Select by index or PR number: ")
+	fmt.Fprint(out, "Select by index, PR number, or owner/repo#number: ")
 
 	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
@@ -172,16 +372,35 @@ func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*
 		}
 	}
 
+	if before, after, found := strings.Cut(input, "#"); found && strings.TrimSpace(before) != "" {
+		num, err := strconv.Atoi(strings.TrimSpace(after))
+		if err != nil {
+			return nil, fmt.Errorf("invalid input: %s", input)
+		}
+		match := findByRepoAndNumber(prs, strings.TrimSpace(before), num)
+		if match != nil {
+			return match, nil
+		}
+		return nil, fmt.Errorf("pull request %s#%d not found", strings.TrimSpace(before), num)
+	}
+
 	num, err := strconv.Atoi(strings.TrimPrefix(input, "#"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid input: %s", input)
 	}
+	matches := make([]*PullRequestSummary, 0)
 	for _, pr := range prs {
 		if pr.Number == num {
-			return pr, nil
+			matches = append(matches, pr)
 		}
 	}
-	return nil, fmt.Errorf("pull request #%d not found", num)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("pull request #%d not found", num)
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("pull request #%d is present in multiple repositories; specify as owner/repo#%d", num, num)
+	}
+	return matches[0], nil
 }
 
 func displayDate(t time.Time) string {
@@ -189,6 +408,72 @@ func displayDate(t time.Time) string {
 		return "unknown"
 	}
 	return t.Format("2006-01-02")
+}
+
+func formatTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.Format(time.RFC3339)
+}
+
+func valueOrFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func summaryRepoName(pr *PullRequestSummary) string {
+	if pr == nil {
+		return ""
+	}
+	owner := strings.TrimSpace(pr.RepoOwner)
+	name := strings.TrimSpace(pr.RepoName)
+	switch {
+	case owner == "" && name == "":
+		return ""
+	case owner == "":
+		return name
+	case name == "":
+		return owner
+	default:
+		return owner + "/" + name
+	}
+}
+
+func findByRepoAndNumber(prs []*PullRequestSummary, repo string, number int) *PullRequestSummary {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil
+	}
+
+	for _, pr := range prs {
+		if pr == nil {
+			continue
+		}
+		if strings.EqualFold(summaryRepoName(pr), repo) && pr.Number == number {
+			return pr
+		}
+	}
+
+	if strings.Contains(repo, "/") {
+		return nil
+	}
+
+	var matches []*PullRequestSummary
+	for _, pr := range prs {
+		if pr == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(pr.RepoName), repo) && pr.Number == number {
+			matches = append(matches, pr)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	return nil
 }
 
 // StripHTML removes HTML tags in a minimal fashion.
@@ -223,7 +508,11 @@ func HasCommand(name string) bool {
 
 // FindRepoRoot discovers the git repository root directory.
 func FindRepoRoot(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	return findRepoRootAt(ctx, ".")
+}
+
+func findRepoRootAt(ctx context.Context, path string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.Discard
