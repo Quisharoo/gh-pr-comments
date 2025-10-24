@@ -40,6 +40,7 @@ type PullRequestSummary struct {
 	Title     string
 	Author    string
 	State     string
+	Created   time.Time
 	Updated   time.Time
 	HeadRef   string
 	BaseRef   string
@@ -201,11 +202,17 @@ func summarizePullRequest(pr *github.PullRequest) *PullRequestSummary {
 		updated = pr.UpdatedAt.Time
 	}
 
+	created := time.Time{}
+	if pr.CreatedAt != nil {
+		created = pr.CreatedAt.Time
+	}
+
 	return &PullRequestSummary{
 		Number:    pr.GetNumber(),
 		Title:     pr.GetTitle(),
 		Author:    author,
 		State:     pr.GetState(),
+		Created:   created,
 		Updated:   updated,
 		HeadRef:   headRef,
 		BaseRef:   baseRef,

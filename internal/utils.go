@@ -100,19 +100,19 @@ func SelectPullRequest(ctx context.Context, prs []*PullRequestSummary, in io.Rea
 		return nil, errors.New("no pull requests available")
 	}
 
-	if HasCommand("fzf") {
-		if pr, err := selectWithFZF(ctx, prs); err == nil {
-			return pr, nil
-		}
-	}
-
+	// Use the simple numbered prompt selection flow only.
+	// Historically we attempted to use `fzf` when available and fell
+	// back to the prompt on error. That created a secondary interactive
+	// prompt (when users escaped the fzf modal). To keep the UX
+	// deterministic for non-TTY environments and avoid duplicate
+	// prompts, always use the prompt-based selector.
 	return selectWithPrompt(prs, in, out)
 }
 
 func selectWithFZF(ctx context.Context, prs []*PullRequestSummary) (*PullRequestSummary, error) {
 	var input bytes.Buffer
 	for _, pr := range prs {
-		line := fmt.Sprintf("#%d\t%s\t@%s\t%s", pr.Number, pr.Title, pr.Author, pr.Updated.Format(time.RFC3339))
+		line := fmt.Sprintf("%s #%d (opened %s)\t@%s\tupdated %s", pr.Title, pr.Number, displayDate(pr.Created), pr.Author, pr.Updated.Format(time.RFC3339))
 		input.WriteString(line)
 		input.WriteByte('\n')
 	}
@@ -153,7 +153,7 @@ func selectWithFZF(ctx context.Context, prs []*PullRequestSummary) (*PullRequest
 func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
 	fmt.Fprintln(out, "Available pull requests:")
 	for idx, pr := range prs {
-		fmt.Fprintf(out, "[%d] #%d %s (by @%s, updated %s)\n", idx+1, pr.Number, pr.Title, pr.Author, pr.Updated.Format(time.RFC3339))
+		fmt.Fprintf(out, "[%d] %s #%d (opened %s) — by @%s, updated %s\n", idx+1, pr.Title, pr.Number, displayDate(pr.Created), pr.Author, pr.Updated.Format(time.RFC3339))
 	}
 	fmt.Fprint(out, "Select by index or PR number: ")
 
@@ -182,6 +182,13 @@ func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*
 		}
 	}
 	return nil, fmt.Errorf("pull request #%d not found", num)
+}
+
+func displayDate(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.Format("2006-01-02")
 }
 
 // StripHTML removes HTML tags in a minimal fashion.
