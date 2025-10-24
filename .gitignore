@@ -1,0 +1,58 @@
+# macOS
+.DS_Store
+
+# Editor & IDE
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Go build artifacts
+bin/
+dist/
+*.test
+*.exe
+coverage.out
+vendor/
+
+# Cursor
+# Exclude user storage except the User/ settings we track
+prefs/cursor/globalStorage/
+prefs/cursor/workspaceStorage/
+
+# Codex
+home/.codex/logs/
+home/.codex/sessions/
+home/.codex/workspace/
+home/.codex/tokens/
+
+# Backups
+*.bak
+*.backup
+
+# Brewfile lock/state
+brew/**/Brewfile.lock.json
+
+# Secrets
+secrets/
+
+# Homebrew cache
+~/Library/Caches/Homebrew/
+# Codex secrets/state
+home/.codex/auth.json
+home/.codex/history.jsonl
+home/.codex/log/
+home/.codex/sessions/
+
+# Repo-wide dumps and exports
+repomix-output.xml
+*.itermexport
+.pr-comments/
+*.log
