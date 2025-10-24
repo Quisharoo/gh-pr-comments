@@ -235,124 +235,34 @@ func parseRepoFromRemote(remote string) string {
 	return ""
 }
 
-// SelectPullRequest chooses a PR either via fzf or a numbered fallback prompt.
+// SelectPullRequest chooses a PR using the numbered prompt flow.
 func SelectPullRequest(ctx context.Context, prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
+	_ = ctx
+	return selectWithPrompt(prs, in, out)
+}
+
+func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
 	if len(prs) == 0 {
 		return nil, errors.New("no pull requests available")
 	}
 
-	// Use the simple numbered prompt selection flow only.
-	// Historically we attempted to use `fzf` when available and fell
-	// back to the prompt on error. That created a secondary interactive
-	// prompt (when users escaped the fzf modal). To keep the UX
-	// deterministic for non-TTY environments and avoid duplicate
-	// prompts, always use the prompt-based selector.
-	return selectWithPrompt(prs, in, out)
-}
-
-func selectWithFZF(ctx context.Context, prs []*PullRequestSummary) (*PullRequestSummary, error) {
-	var input bytes.Buffer
-	for _, pr := range prs {
-		repoName := summaryRepoName(pr)
-		if repoName == "" {
-			repoName = "(unknown repo)"
-		}
-		line := fmt.Sprintf("%s #%d — %s\tstate %s\tupdated %s", repoName, pr.Number, pr.Title, valueOrFallback(strings.ToLower(pr.State), "unknown"), formatTimestamp(pr.Updated))
-		input.WriteString(line)
-		input.WriteByte('\n')
-	}
-
-	cmd := exec.CommandContext(ctx, "fzf", "--prompt", "Select PR> ", "--with-nth", "1,2", "--no-sort")
-	cmd.Stdin = &input
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return nil, err
-	}
-
-	selection := strings.TrimSpace(stdout.String())
-	if selection == "" {
-		return nil, errors.New("no pull request selected")
-	}
-
-	repoPart, rest, found := strings.Cut(selection, "#")
-	if !found {
-		return nil, errors.New("unable to parse selection output")
-	}
-	repoPart = strings.TrimSpace(repoPart)
-	if repoPart == "" {
-		return nil, errors.New("unable to parse selection output")
-	}
-
-	numberDigits := make([]rune, 0, len(rest))
-	for _, r := range rest {
-		if r < '0' || r > '9' {
-			break
-		}
-		numberDigits = append(numberDigits, r)
-	}
-	if len(numberDigits) == 0 {
-		return nil, errors.New("unable to parse selection output")
-	}
-
-	num, err := strconv.Atoi(string(numberDigits))
-	if err != nil {
-		return nil, fmt.Errorf("invalid selection: %s", selection)
-	}
-
-	if match := findByRepoAndNumber(prs, repoPart, num); match != nil {
-		return match, nil
-	}
-
-	matches := make([]*PullRequestSummary, 0)
-	for _, pr := range prs {
-		if pr.Number == num {
-			matches = append(matches, pr)
-		}
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) > 1 {
-		return nil, fmt.Errorf("selected PR #%d is present in multiple repositories; specify owner/repo in the prompt", num)
-	}
-	return nil, fmt.Errorf("selected PR #%d not found", num)
-}
-
-func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer) (*PullRequestSummary, error) {
-	fmt.Fprintln(out, "Available pull requests:")
+	includeOwner := shouldShowRepoOwner(prs)
+	arrow := "\u2192"
 	for idx, pr := range prs {
-		repoName := summaryRepoName(pr)
-		if repoName == "" {
-			repoName = "(unknown repo)"
-		}
-		state := pr.State
-		if state == "" {
-			state = "unknown"
-		}
-
-		headRef := pr.HeadRef
-		if headRef == "" {
-			headRef = "?"
-		}
-
-		baseRef := pr.BaseRef
-		if baseRef == "" {
-			baseRef = "?"
-		}
-
-		fmt.Fprintf(out, "[%d] %s #%d — %s (%s) [%s -> %s]; opened %s; author @%s; updated %s\n",
+		repoName := formatRepoDisplay(pr, includeOwner)
+		headRef := valueOrFallback(strings.TrimSpace(pr.HeadRef), "?")
+		baseRef := valueOrFallback(strings.TrimSpace(pr.BaseRef), "?")
+		updated := formatUpdatedTimestamp(pr.Updated)
+		title := strings.TrimSpace(pr.Title)
+		fmt.Fprintf(out, "[%d] %s#%d - %s [%s%s%s] updated %s\n",
 			idx+1,
 			repoName,
 			pr.Number,
-			pr.Title,
-			state,
+			title,
 			headRef,
+			arrow,
 			baseRef,
-			displayDate(pr.Created),
-			valueOrFallback(pr.Author, "unknown"),
-			formatTimestamp(pr.Updated),
+			updated,
 		)
 	}
 	fmt.Fprint(out, "Select by index, PR number, or owner/repo#number: ")
@@ -417,6 +327,13 @@ func formatTimestamp(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
+func formatUpdatedTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.UTC().Truncate(time.Minute).Format("2006-01-02 15:04Z")
+}
+
 func valueOrFallback(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -474,6 +391,45 @@ func findByRepoAndNumber(prs []*PullRequestSummary, repo string, number int) *Pu
 		return matches[0]
 	}
 	return nil
+}
+
+func shouldShowRepoOwner(prs []*PullRequestSummary) bool {
+	owners := make(map[string]struct{})
+	for _, pr := range prs {
+		if pr == nil {
+			continue
+		}
+		owner := strings.TrimSpace(pr.RepoOwner)
+		if owner == "" {
+			continue
+		}
+		owners[strings.ToLower(owner)] = struct{}{}
+		if len(owners) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func formatRepoDisplay(pr *PullRequestSummary, includeOwner bool) string {
+	if pr == nil {
+		return "(unknown repo)"
+	}
+	owner := strings.TrimSpace(pr.RepoOwner)
+	name := strings.TrimSpace(pr.RepoName)
+	if name == "" && owner == "" {
+		return "(unknown repo)"
+	}
+	if includeOwner && owner != "" {
+		if name == "" {
+			return owner
+		}
+		return owner + "/" + name
+	}
+	if name != "" {
+		return name
+	}
+	return owner
 }
 
 // StripHTML removes HTML tags in a minimal fashion.
