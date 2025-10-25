@@ -243,6 +243,14 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	output := ghprcomments.BuildOutput(prSummary, payloads, normOpts)
 
 	if save {
+		state := strings.ToLower(strings.TrimSpace(prSummary.State))
+		if state != "open" {
+			if state == "" {
+				state = "unknown"
+			}
+			return fmt.Errorf("--save only supports open pull requests; #%d is %s", prSummary.Number, state)
+		}
+
 		repoRoot := strings.TrimSpace(selectedRepo.Path)
 		if repoRoot == "" {
 			var err error
@@ -261,6 +269,18 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 		if _, err := fmt.Fprintf(out, "Comments saved to %s\n", savePath); err != nil {
 			return fmt.Errorf("announce save path: %w", err)
+		}
+
+		openPRs, listErr := fetcher.ListPullRequestSummaries(ctx, owner, repo)
+		if listErr != nil {
+			if !errors.Is(listErr, ghprcomments.ErrNoPullRequests) {
+				fmt.Fprintf(errOut, "warning: saved output but skipped pruning; unable to list open pull requests: %v\n", listErr)
+				return nil
+			}
+			openPRs = nil
+		}
+		if pruneErr := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, repo, openPRs); pruneErr != nil {
+			fmt.Fprintf(errOut, "warning: prune skipped; %v\n", pruneErr)
 		}
 		return nil
 	}
