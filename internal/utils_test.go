@@ -327,8 +327,12 @@ func TestPruneStaleSavedCommentsRemovesClosedFiles(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := PruneStaleSavedComments(ctx, getter, repoRoot, "octo", "repo", []*PullRequestSummary{{Number: 7, State: "open"}}); err != nil {
+	removed, err := PruneStaleSavedComments(ctx, getter, repoRoot, "octo", "repo", []*PullRequestSummary{{Number: 7, State: "open"}})
+	if err != nil {
 		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != closedFile {
+		t.Fatalf("expected closed file to be reported as removed, got %v", removed)
 	}
 
 	if _, err := os.Stat(openFile); err != nil {
@@ -355,8 +359,12 @@ func TestPruneStaleSavedCommentsRemovesDeletedPRs(t *testing.T) {
 		12: &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}, Message: "Not Found"},
 	}}
 
-	if err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil); err != nil {
+	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil)
+	if err != nil {
 		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != deleted {
+		t.Fatalf("expected deleted file to be reported as removed, got %v", removed)
 	}
 
 	if _, err := os.Stat(deleted); !errors.Is(err, os.ErrNotExist) {
@@ -379,12 +387,15 @@ func TestPruneStaleSavedCommentsReturnsErrorWhenLookupFails(t *testing.T) {
 	lookupErr := fmt.Errorf("boom")
 	getter := &fakeSummaryGetter{errors: map[int]error{11: lookupErr}}
 
-	err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil)
+	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil)
 	if err == nil {
 		t.Fatal("expected error but got nil")
 	}
 	if !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected error to include lookup failure; got %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("expected no files reported removed on error, got %v", removed)
 	}
 
 	if _, statErr := os.Stat(filePath); statErr != nil {
