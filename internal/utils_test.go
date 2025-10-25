@@ -265,34 +265,36 @@ func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
 	}
 
 	base := filepath.Base(path)
-	if !strings.HasPrefix(base, "PR_123_feature_add-feature_") {
-		t.Fatalf("unexpected filename %q", base)
+	if base != "PR_123.json" {
+		t.Fatalf("unexpected filename %q, expected PR_123.json", base)
 	}
 }
 
-func TestSaveOutputProducesUniqueFilenames(t *testing.T) {
+func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 	repoRoot := t.TempDir()
 	pr := &PullRequestSummary{Number: 5, HeadRef: "feature"}
-	payload := []byte("payload")
+	payload1 := []byte("first payload")
+	payload2 := []byte("second payload")
 
-	first, err := SaveOutput(repoRoot, pr, payload)
+	first, err := SaveOutput(repoRoot, pr, payload1)
 	if err != nil {
 		t.Fatalf("first SaveOutput returned error: %v", err)
 	}
 
-	second, err := SaveOutput(repoRoot, pr, payload)
+	second, err := SaveOutput(repoRoot, pr, payload2)
 	if err != nil {
 		t.Fatalf("second SaveOutput returned error: %v", err)
 	}
 
-	if first == second {
-		t.Fatalf("expected unique filenames, got %q", first)
+	if first != second {
+		t.Fatalf("expected same filename, got %q and %q", first, second)
 	}
 
-	if _, err := os.Stat(first); err != nil {
-		t.Fatalf("first file missing: %v", err)
+	data, err := os.ReadFile(second)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
 	}
-	if _, err := os.Stat(second); err != nil {
-		t.Fatalf("second file missing: %v", err)
+	if string(data) != string(payload2) {
+		t.Fatalf("file content mismatch: got %q, want %q", string(data), string(payload2))
 	}
 }
