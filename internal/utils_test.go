@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -246,7 +247,16 @@ func TestSelectWithPromptColourizedOutput(t *testing.T) {
 
 func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
 	repoRoot := t.TempDir()
-	pr := &PullRequestSummary{Number: 123, HeadRef: "feature/add-feature"}
+	pr := &PullRequestSummary{
+		Number:    123,
+		Title:     "Add Feature 🚀",
+		HeadRef:   "feature/add-feature",
+		BaseRef:   "main",
+		RepoOwner: "octo",
+		RepoName:  "repo",
+		Author:    "tester",
+		URL:       "https://example.com",
+	}
 	payload := []byte(`{"ok":true}`)
 
 	path, err := SaveOutput(repoRoot, pr, payload)
@@ -263,25 +273,64 @@ func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read saved payload: %v", err)
 	}
-	if string(data) != string(payload) {
-		t.Fatalf("payload mismatch: got %q want %q", string(data), string(payload))
+	content := string(data)
+
+	if !strings.HasPrefix(content, "---\n") {
+		t.Fatalf("expected YAML front matter, got %q", content)
+	}
+	if !strings.Contains(content, "pr_number: 123") {
+		t.Fatalf("front matter missing pr_number: %q", content)
+	}
+	if !strings.Contains(content, `pr_title: "Add Feature 🚀"`) {
+		t.Fatalf("front matter missing pr_title: %q", content)
+	}
+	if !strings.Contains(content, `repo_owner: "octo"`) {
+		t.Fatalf("front matter missing repo_owner: %q", content)
+	}
+	if !strings.Contains(content, `repo_name: "repo"`) {
+		t.Fatalf("front matter missing repo_name: %q", content)
+	}
+	if !strings.Contains(content, `head_ref: "feature/add-feature"`) {
+		t.Fatalf("front matter missing head_ref: %q", content)
+	}
+	if !strings.Contains(content, `base_ref: "main"`) {
+		t.Fatalf("front matter missing base_ref: %q", content)
+	}
+	if !strings.Contains(content, `author: "tester"`) {
+		t.Fatalf("front matter missing author: %q", content)
+	}
+	if !strings.Contains(content, `url: "https://example.com"`) {
+		t.Fatalf("front matter missing url: %q", content)
+	}
+
+	savedAtRe := regexp.MustCompile(`saved_at: "[^"]+"`)
+	if !savedAtRe.MatchString(content) {
+		t.Fatalf("front matter missing saved_at timestamp: %q", content)
+	}
+
+	jsonBlock := "```json\n" + string(payload) + "\n```"
+	if !strings.Contains(content, jsonBlock) {
+		t.Fatalf("expected JSON block to contain payload; want %q in %q", jsonBlock, content)
 	}
 
 	base := filepath.Base(path)
-	if base != "PR_123.json" {
-		t.Fatalf("unexpected filename %q, expected PR_123.json", base)
+	if base != "pr-123-add-feature.md" {
+		t.Fatalf("unexpected filename %q, expected pr-123-add-feature.md", base)
 	}
 }
 
 func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 	repoRoot := t.TempDir()
-	pr := &PullRequestSummary{Number: 5, HeadRef: "feature"}
+	pr := &PullRequestSummary{Number: 5, Title: "Improve API", HeadRef: "feature"}
 	payload1 := []byte("first payload")
 	payload2 := []byte("second payload")
 
 	first, err := SaveOutput(repoRoot, pr, payload1)
 	if err != nil {
 		t.Fatalf("first SaveOutput returned error: %v", err)
+	}
+	if filepath.Base(first) != "pr-5-improve-api.md" {
+		t.Fatalf("unexpected filename %q", first)
 	}
 
 	second, err := SaveOutput(repoRoot, pr, payload2)
@@ -297,8 +346,25 @@ func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read file: %v", err)
 	}
-	if string(data) != string(payload2) {
-		t.Fatalf("file content mismatch: got %q, want %q", string(data), string(payload2))
+	content := string(data)
+	if strings.Contains(content, string(payload1)) {
+		t.Fatalf("expected old payload to be overwritten, found in content: %q", content)
+	}
+	if !strings.Contains(content, string(payload2)) {
+		t.Fatalf("file missing new payload: %q", content)
+	}
+}
+
+func TestSaveOutputRequiresPullRequestNumber(t *testing.T) {
+	repoRoot := t.TempDir()
+	payload := []byte("{}")
+
+	if _, err := SaveOutput(repoRoot, nil, payload); err == nil {
+		t.Fatal("expected error when PR is nil")
+	}
+
+	if _, err := SaveOutput(repoRoot, &PullRequestSummary{Number: 0}, payload); err == nil {
+		t.Fatal("expected error when PR number is zero")
 	}
 }
 
@@ -309,8 +375,8 @@ func TestPruneStaleSavedCommentsRemovesClosedFiles(t *testing.T) {
 		t.Fatalf("failed to create comments directory: %v", err)
 	}
 
-	openFile := filepath.Join(dir, "PR_7.json")
-	closedFile := filepath.Join(dir, "PR_9.json")
+	openFile := filepath.Join(dir, "pr-7-colourful.md")
+	closedFile := filepath.Join(dir, "pr-9-defunct.md")
 
 	if err := os.WriteFile(openFile, []byte("open"), 0o644); err != nil {
 		t.Fatalf("write open file: %v", err)
@@ -350,7 +416,7 @@ func TestPruneStaleSavedCommentsRemovesDeletedPRs(t *testing.T) {
 		t.Fatalf("failed to create comments directory: %v", err)
 	}
 
-	deleted := filepath.Join(dir, "PR_12.json")
+	deleted := filepath.Join(dir, "pr-12-deleted.md")
 	if err := os.WriteFile(deleted, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("write deleted file: %v", err)
 	}
@@ -379,7 +445,7 @@ func TestPruneStaleSavedCommentsReturnsErrorWhenLookupFails(t *testing.T) {
 		t.Fatalf("failed to create comments directory: %v", err)
 	}
 
-	filePath := filepath.Join(dir, "PR_11.json")
+	filePath := filepath.Join(dir, "pr-11-failure.md")
 	if err := os.WriteFile(filePath, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
