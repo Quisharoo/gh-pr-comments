@@ -2,7 +2,10 @@ package ghprcomments
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,4 +300,109 @@ func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 	if string(data) != string(payload2) {
 		t.Fatalf("file content mismatch: got %q, want %q", string(data), string(payload2))
 	}
+}
+
+func TestPruneStaleSavedCommentsRemovesClosedFiles(t *testing.T) {
+	repoRoot := t.TempDir()
+	dir := filepath.Join(repoRoot, ".pr-comments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create comments directory: %v", err)
+	}
+
+	openFile := filepath.Join(dir, "PR_7.json")
+	closedFile := filepath.Join(dir, "PR_9.json")
+
+	if err := os.WriteFile(openFile, []byte("open"), 0o644); err != nil {
+		t.Fatalf("write open file: %v", err)
+	}
+	if err := os.WriteFile(closedFile, []byte("closed"), 0o644); err != nil {
+		t.Fatalf("write closed file: %v", err)
+	}
+
+	getter := &fakeSummaryGetter{
+		summaries: map[int]*PullRequestSummary{
+			7: {Number: 7, State: "open"},
+			9: {Number: 9, State: "closed"},
+		},
+	}
+
+	ctx := context.Background()
+	if err := PruneStaleSavedComments(ctx, getter, repoRoot, "octo", "repo", []*PullRequestSummary{{Number: 7, State: "open"}}); err != nil {
+		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+
+	if _, err := os.Stat(openFile); err != nil {
+		t.Fatalf("expected open PR file to remain: %v", err)
+	}
+	if _, err := os.Stat(closedFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected closed PR file to be removed, got err=%v", err)
+	}
+}
+
+func TestPruneStaleSavedCommentsRemovesDeletedPRs(t *testing.T) {
+	repoRoot := t.TempDir()
+	dir := filepath.Join(repoRoot, ".pr-comments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create comments directory: %v", err)
+	}
+
+	deleted := filepath.Join(dir, "PR_12.json")
+	if err := os.WriteFile(deleted, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("write deleted file: %v", err)
+	}
+
+	getter := &fakeSummaryGetter{errors: map[int]error{
+		12: &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}, Message: "Not Found"},
+	}}
+
+	if err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil); err != nil {
+		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+
+	if _, err := os.Stat(deleted); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected deleted PR file to be removed, got err=%v", err)
+	}
+}
+
+func TestPruneStaleSavedCommentsReturnsErrorWhenLookupFails(t *testing.T) {
+	repoRoot := t.TempDir()
+	dir := filepath.Join(repoRoot, ".pr-comments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create comments directory: %v", err)
+	}
+
+	filePath := filepath.Join(dir, "PR_11.json")
+	if err := os.WriteFile(filePath, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	lookupErr := fmt.Errorf("boom")
+	getter := &fakeSummaryGetter{errors: map[int]error{11: lookupErr}}
+
+	err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil)
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected error to include lookup failure; got %v", err)
+	}
+
+	if _, statErr := os.Stat(filePath); statErr != nil {
+		t.Fatalf("expected file to remain after lookup error: %v", statErr)
+	}
+}
+
+type fakeSummaryGetter struct {
+	summaries map[int]*PullRequestSummary
+	errors    map[int]error
+}
+
+func (f *fakeSummaryGetter) GetPullRequestSummary(_ context.Context, _ string, _ string, number int) (*PullRequestSummary, error) {
+	if err, ok := f.errors[number]; ok {
+		return nil, err
+	}
+	if summary, ok := f.summaries[number]; ok {
+		return summary, nil
+	}
+	return nil, fmt.Errorf("pull request %d not found", number)
 }
