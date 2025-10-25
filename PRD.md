@@ -62,7 +62,7 @@ A single CLI command outputs every accessible PR comment in a unified, structure
    - `gh pr-comments --flat | codex evaluate-pr --stdin`
    - Provides a single JSON array of comment objects.
 5. **Save for later**
-   - `gh pr-comments --save` → `.pr-comments/PR_<number>_<branch>.json`
+   - `gh pr-comments --save` → `.pr-comments/pr-<number>-<slug>.md`
 
 ---
 
