@@ -1,0 +1,50 @@
+## PR Code Suggestions ✨
+
+<!-- 51e2dcd -->
+
+Explore these optional code suggestions:
+
+<table><thead><tr><td><strong>Category</strong></td><td align=left><strong>Suggestion&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; </strong></td><td align=center><strong>Impact</strong></td></tr><tbody><tr><td rowspan=1>Possible issue</td>
+<td>
+
+
+
+<details><summary>Prevent overwriting a generic file</summary>
+
+___
+
+**Return an error in <code>SaveOutput</code> if the pull request is <code>nil</code> or its number is 0 to <br>prevent creating a generic <code>PR_0.json</code> file and overwriting it on subsequent runs.**
+
+[internal/utils.go [509-514]](https://github.com/Quisharoo/gh-pr-comments/pull/3/files#diff-929037946b246d0a86c397f9b13b8f3cd4bc0e8990be1b0df0f81a6cad420675R509-R514)
+
+```diff
+-	number := 0
+-	if pr != nil {
+-		number = pr.Number
++	if pr == nil || pr.Number == 0 {
++		return "", errors.New("cannot save output without a valid pull request number")
+ 	}
++	number := pr.Number
+ 
+ 	filename := fmt.Sprintf("PR_%d.json", number)
+```
+
+
+- [ ] **Apply / Chat** <!-- /improve --apply_suggestion=0 -->
+
+
+<details><summary>Suggestion importance[1-10]: 8</summary>
+
+__
+
+Why: The suggestion correctly identifies a valid edge case where `pr` is `nil`, leading to the creation of a generic `PR_0.json` file. Since the PR removed unique filename generation, this could cause unintended file overwrites and data loss, so adding a guard clause is a significant improvement to robustness.
+
+
+</details></details></td><td align=center>Medium
+
+</td></tr>
+<tr><td align="center" colspan="2">
+
+- [ ] Update <!-- /improve_multi --more_suggestions=true -->
+
+</td><td></td></tr></tbody></table>

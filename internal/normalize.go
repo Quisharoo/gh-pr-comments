@@ -330,6 +330,7 @@ func expandDetailsBlocks(body string) string {
 			}
 			summary := strings.TrimSpace(StripHTML(parts[1]))
 			body := strings.TrimSpace(parts[2])
+			body = strings.TrimSpace(StripHTML(body))
 			if summary != "" && body != "" {
 				return summary + "\n" + body
 			}

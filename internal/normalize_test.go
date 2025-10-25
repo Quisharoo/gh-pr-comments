@@ -2,6 +2,7 @@ package ghprcomments
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,7 +82,7 @@ func TestBuildOutputKeepsBotsAndCleansBody(t *testing.T) {
 }
 
 func TestCleanCommentBodyPreservesDetailsContent(t *testing.T) {
-	data, err := os.ReadFile("../example_bot_feedback.html")
+	data, err := os.ReadFile(filepath.Join("testdata", "example_bot_feedback.html"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestCleanCommentBodyPreservesDetailsContent(t *testing.T) {
 
 	for _, want := range checks {
 		if !strings.Contains(got, want) {
-			t.Fatalf("cleaned body missing %q in %q", want, got)
+			t.Errorf("cleaned body missing %q in %q", want, got)
 		}
 	}
 }
