@@ -45,6 +45,7 @@ func TestMarshalJSONFlatProducesArrayOfComments(t *testing.T) {
 			Repo:   "owner/repo",
 			Number: 7,
 		},
+		CommentCount: 1,
 		Comments: []AuthorComments{
 			{
 				Author: "octocat",
@@ -73,5 +74,25 @@ func TestMarshalJSONFlatProducesArrayOfComments(t *testing.T) {
 	}
 	if decoded[0]["author"].(string) != "octocat" {
 		t.Fatalf("unexpected author in flat payload: %#v", decoded[0]["author"])
+	}
+}
+
+func TestMarshalJSONIncludesCommentCount(t *testing.T) {
+	out := Output{
+		PR:           PullRequestMetadata{Repo: "owner/repo", Number: 9},
+		CommentCount: 2,
+		Comments: []AuthorComments{
+			{Author: "octocat", Comments: []Comment{{Type: "issue", Author: "octocat", CreatedAt: time.Now()}}},
+			{Author: "hubot", Comments: []Comment{{Type: "review_comment", Author: "hubot", CreatedAt: time.Now()}}},
+		},
+	}
+
+	payload, err := MarshalJSON(out, false)
+	if err != nil {
+		t.Fatalf("marshal nested: %v", err)
+	}
+
+	if !strings.Contains(string(payload), "\"comment_count\": 2") {
+		t.Fatalf("expected payload to include comment_count, got %q", string(payload))
 	}
 }
