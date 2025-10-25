@@ -24,6 +24,7 @@ func main() {
 }
 
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
+	args = normalizeArgs(args)
 	fs := flag.NewFlagSet("gh-pr-comments", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 
@@ -241,18 +242,34 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 
 	output := ghprcomments.BuildOutput(prSummary, payloads, normOpts)
 
-	var rendered []byte
+	if save {
+		repoRoot := strings.TrimSpace(selectedRepo.Path)
+		if repoRoot == "" {
+			var err error
+			repoRoot, err = ghprcomments.FindRepoRoot(ctx)
+			if err != nil {
+				return fmt.Errorf("find repo root: %w", err)
+			}
+		}
+		payload, err := ghprcomments.MarshalJSON(output, flat)
+		if err != nil {
+			return fmt.Errorf("marshal JSON for save: %w", err)
+		}
+		savePath, err := ghprcomments.SaveOutput(repoRoot, prSummary, payload)
+		if err != nil {
+			return fmt.Errorf("save output: %w", err)
+		}
+		if _, err := fmt.Fprintf(out, "Comments saved to %s\n", savePath); err != nil {
+			return fmt.Errorf("announce save path: %w", err)
+		}
+		return nil
+	}
 
 	if text {
 		markup := ghprcomments.RenderMarkdown(output)
 		if _, err := fmt.Fprintln(out, markup); err != nil {
 			return fmt.Errorf("write markdown: %w", err)
 		}
-		payload, err := ghprcomments.MarshalJSON(output, false)
-		if err != nil {
-			return fmt.Errorf("marshal JSON for save: %w", err)
-		}
-		rendered = payload
 	} else {
 		payload, err := ghprcomments.MarshalJSON(output, flat)
 		if err != nil {
@@ -270,28 +287,22 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 				return fmt.Errorf("write newline: %w", err)
 			}
 		}
-		rendered = payload
-	}
-
-	if save {
-		repoRoot := strings.TrimSpace(selectedRepo.Path)
-		if repoRoot == "" {
-			var err error
-			repoRoot, err = ghprcomments.FindRepoRoot(ctx)
-			if err != nil {
-				return fmt.Errorf("find repo root: %w", err)
-			}
-		}
-		savePath, err := ghprcomments.SaveOutput(repoRoot, prSummary, rendered)
-		if err != nil {
-			return fmt.Errorf("save output: %w", err)
-		}
-		if _, err := fmt.Fprintf(errOut, "saved output to %s\n", savePath); err != nil {
-			return fmt.Errorf("announce save path: %w", err)
-		}
 	}
 
 	return nil
+}
+
+func normalizeArgs(args []string) []string {
+	cleaned := args
+	for len(cleaned) > 0 {
+		switch cleaned[0] {
+		case "prcomments", "pr-comments", "gh-prcomments", "gh-pr-comments":
+			cleaned = cleaned[1:]
+			continue
+		}
+		break
+	}
+	return cleaned
 }
 
 func isTerminalWriter(w io.Writer) bool {
