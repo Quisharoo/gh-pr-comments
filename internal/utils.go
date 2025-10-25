@@ -24,7 +24,7 @@ import (
 var botRegex = regexp.MustCompile(`(?i)(copilot|compliance|security|dependabot|.*\[bot\])`)
 var htmlTagRegex = regexp.MustCompile(`(?s)<[^>]+>`)
 
-const savedOutputDir = ".pr-comments"
+const defaultSaveDir = ".pr-comments"
 
 // Repository represents a local git repository and its remote metadata.
 type Repository struct {
@@ -338,20 +338,6 @@ func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer, op
 	return matches[0], nil
 }
 
-func displayDate(t time.Time) string {
-	if t.IsZero() {
-		return "unknown"
-	}
-	return t.Format("2006-01-02")
-}
-
-func formatTimestamp(t time.Time) string {
-	if t.IsZero() {
-		return "unknown"
-	}
-	return t.Format(time.RFC3339)
-}
-
 func formatUpdatedTimestamp(t time.Time) string {
 	if t.IsZero() {
 		return "unknown"
@@ -503,19 +489,106 @@ func findRepoRootAt(ctx context.Context, path string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// SaveOutput persists the rendered payload to the .pr-comments directory as Markdown.
-func SaveOutput(repoRoot string, pr *PullRequestSummary, payload []byte) (string, error) {
+func resolveSaveDir(repoRoot, saveDir string) string {
+	dir := strings.TrimSpace(saveDir)
+	if dir == "" {
+		dir = defaultSaveDir
+	}
+	cleaned := filepath.Clean(dir)
+	if filepath.IsAbs(cleaned) {
+		return cleaned
+	}
+	return filepath.Join(repoRoot, cleaned)
+}
+
+func repoNamespace(owner, repo string) string {
+	ownerSlug := slugifyRepoSegment(owner)
+	repoSlug := slugifyRepoSegment(repo)
+	switch {
+	case ownerSlug != "" && repoSlug != "":
+		return ownerSlug + "-" + repoSlug
+	case ownerSlug != "":
+		return ownerSlug
+	default:
+		return repoSlug
+	}
+}
+
+func slugifyRepoSegment(value string) string {
+	candidate := strings.ToLower(strings.TrimSpace(value))
+	if candidate == "" {
+		return ""
+	}
+	var builder strings.Builder
+	prevHyphen := false
+	for _, r := range candidate {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			prevHyphen = false
+		case unicode.IsSpace(r) || r == '-' || r == '_' || r == '.':
+			if !prevHyphen && builder.Len() > 0 {
+				builder.WriteByte('-')
+				prevHyphen = true
+			}
+		default:
+			if builder.Len() == 0 {
+				continue
+			}
+			if !prevHyphen {
+				builder.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+		if builder.Len() >= 80 {
+			break
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func shouldNamespaceDir(repoRoot, dir string) bool {
+	if repoRoot == "" {
+		return true
+	}
+	rel, err := filepath.Rel(repoRoot, dir)
+	if err != nil {
+		return true
+	}
+	if rel == "" || rel == "." {
+		return false
+	}
+	if rel == ".." {
+		return true
+	}
+	return strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func repoSaveDirectory(repoRoot, baseDir, owner, repo string) string {
+	namespace := repoNamespace(owner, repo)
+	if namespace == "" {
+		return baseDir
+	}
+	if shouldNamespaceDir(repoRoot, baseDir) {
+		return filepath.Join(baseDir, namespace)
+	}
+	return baseDir
+}
+
+// SaveOutput persists the rendered payload to the configured save directory as Markdown.
+func SaveOutput(repoRoot string, pr *PullRequestSummary, payload []byte, saveDir string) (string, error) {
 	if pr == nil || pr.Number <= 0 {
 		return "", errors.New("save requires a pull request with a number")
 	}
 
-	dir := filepath.Join(repoRoot, savedOutputDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	baseDir := resolveSaveDir(repoRoot, saveDir)
+	targetDir := repoSaveDirectory(repoRoot, baseDir, pr.RepoOwner, pr.RepoName)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return "", err
 	}
 
 	filename := fmt.Sprintf("pr-%d-%s.md", pr.Number, slugify(pr.Title, pr.HeadRef))
-	target := filepath.Join(dir, filename)
+	target := filepath.Join(targetDir, filename)
 
 	content := buildFeedbackMarkdown(pr, payload)
 	if err := os.WriteFile(target, content, 0o644); err != nil {
@@ -641,12 +714,13 @@ type PullRequestSummaryGetter interface {
 
 // PruneStaleSavedComments removes saved comment files for pull requests that are no longer open.
 // It returns the absolute paths of any files that were deleted.
-func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGetter, repoRoot, owner, repo string, open []*PullRequestSummary) ([]string, error) {
+func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGetter, repoRoot, owner, repo string, open []*PullRequestSummary, saveDir string) ([]string, error) {
 	if getter == nil {
 		return nil, errors.New("prune requires a pull request getter")
 	}
 
-	dir := filepath.Join(repoRoot, savedOutputDir)
+	baseDir := resolveSaveDir(repoRoot, saveDir)
+	dir := repoSaveDirectory(repoRoot, baseDir, owner, repo)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

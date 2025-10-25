@@ -28,10 +28,9 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 │   ├── Normalization       # Comment aggregation and processing
 │   ├── Rendering           # Output formatting (JSON, Markdown)
 │   ├── Colorization        # Terminal color support
-│   └── Utilities           # Repository detection, file I/O, helpers
+│   └── Utilities           # Repository detection, file I/O, helpers (including save-dir handling)
 ├── extension.yml            # gh extension metadata
 ├── go.mod/go.sum            # Go module definition
-├── PRD.md                   # Product requirements document
 ├── AGENTS.md                # This file: coding guidelines & architecture
 └── README.md                # User-facing documentation
 ```
@@ -68,7 +67,7 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 #### Utilities Layer (`internal/`)
 - Repository discovery (environment variables, `gh` CLI, git remotes)
 - Git repository root detection
-- File persistence to standard output directories
+- File persistence to `.pr-comments/` by default (override via `GH_PR_COMMENTS_SAVE_DIR` or `--save-dir`)
 - Interactive and fallback PR selection modes
 
 ---
@@ -90,7 +89,7 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 
 ### Data Contracts
 - **Primary output structure:** PR metadata + grouped author comments
-- **Schema stability:** Changes to JSON output require PRD update
+- **Schema stability:** Changes to JSON output should be documented alongside user-facing docs
 - **Backward compatibility:** Maintain existing field names and structure
 
 ### Dependencies
@@ -104,6 +103,7 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 - Use standard directory creation with appropriate permissions
 - Write files atomically where possible
 - UTF-8 encoding only
+- `.pr-comments/` stays gitignored; provide `GH_PR_COMMENTS_SAVE_DIR`/`--save-dir` when saved artifacts must be tracked
 
 ### Error Messages
 - User-facing errors must be actionable with clear remediation steps
@@ -179,9 +179,8 @@ Standard Go toolchain:
 ## Contribution Workflow
 
 ### Before Starting
-1. Review `PRD.md` for current feature status and requirements
-2. Check existing issues/PRs for related work
-3. Ensure development environment is Go 1.24+ compatible
+1. Review existing issues/PRs for related work
+2. Ensure development environment is Go 1.22+ compatible
 
 ### Development Process
 1. Create feature branch from `main`
@@ -190,8 +189,7 @@ Standard Go toolchain:
 4. Run quality checks (test, vet, fmt)
 5. **Build and install extension:** `go build -o gh-pr-comments ./cmd && gh extension install .`
 6. Test in CLI with real workflows
-7. Update `PRD.md` checkboxes only when functionality fully ships
-8. Commit with clear, descriptive messages
+7. Commit with clear, descriptive messages
 
 ### Manual Testing
 Each change should include either:
@@ -202,8 +200,7 @@ Validate key workflows such as interactive selection, output format variations, 
 
 ### Documentation
 - Update `README.md` for new user-facing flags or features
-- Update `AGENTS.md` (this file) for architectural changes
-- Keep `PRD.md` synchronized with implementation status
+- Update `AGENTS.md` (this file) when architecture or guardrails change
 
 ### Code Review Standards
 - Small, focused PRs (< 400 lines preferred)
@@ -232,7 +229,7 @@ Validate key workflows such as interactive selection, output format variations, 
 2. Integrate into comment aggregation pipeline
 3. Update normalization layer to handle new comment type
 4. Add tests with mock API responses
-5. Update PRD functional requirements
+5. Document the behavior in `README.md` (and update guardrails here if required)
 
 ### Adding New Filtering/Sorting
 1. Add filter/sort options to normalization configuration
@@ -249,40 +246,10 @@ Validate key workflows such as interactive selection, output format variations, 
 - Verify authentication status with `gh` CLI
 - Test GitHub Enterprise scenarios with host environment variable
 
-### Common Issues
-| Issue | Diagnosis | Solution |
-|-------|-----------|----------|
-| Authentication errors | Missing or invalid token | Configure authentication via `gh` CLI |
-| Repository not found | Not in git directory | Navigate into repository directory |
-| PR not found | Wrong repo or invalid number | Use interactive selection to list available PRs |
-| Rate limit exceeded | Too many API calls | Wait for limit reset or use authenticated token |
-| Missing colors | Terminal not detected | Check TTY detection or `NO_COLOR` environment variable |
-| zsh autocorrect prompts | Shell tries to replace `pr-comments` with `.pr-comments` | Add `alias gh='nocorrect gh'` or disable `CORRECT` for gh commands |
-
 ### Performance Profiling
 Use standard Go profiling tools for CPU and memory analysis:
 - Generate profiles with test benchmarks
 - Analyze with `pprof` tooling
-
----
-
-## Future Considerations
-
-### Potential Features (Not Currently Implemented)
-- GraphQL API support for richer comment threading
-- Unresolved thread detection and filtering
-- Inline diff context inclusion
-- CI/deployment status aggregation
-- Real-time streaming mode
-- Custom comment filtering DSL
-- Export formats: YAML, CSV, HTML
-- Webhook receiver for automated aggregation
-
-### Scalability Notes
-- Current architecture supports adding new comment types without refactoring
-- Rendering pipeline is modular; new formats can be added independently
-- Repository detection is extensible for monorepo scenarios
-- API client can be swapped for GraphQL without changing normalization layer
 
 ---
 

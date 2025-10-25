@@ -36,15 +36,17 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	var stripHTML bool
 	var noColour bool
 	var noColor bool
+	var saveDir string
 
 	fs.IntVar(&prNumber, "p", 0, "pull request number")
 	fs.IntVar(&prNumber, "pr", 0, "pull request number")
 	fs.BoolVar(&flat, "flat", false, "emit a single JSON array of comments")
 	fs.BoolVar(&text, "text", false, "render comments as Markdown")
-	fs.BoolVar(&save, "save", false, "persist output to .pr-comments/")
+	fs.BoolVar(&save, "save", false, "persist output (defaults to .pr-comments/; override via --save-dir or GH_PR_COMMENTS_SAVE_DIR)")
 	fs.BoolVar(&stripHTML, "strip-html", false, "strip HTML tags from comment bodies")
 	fs.BoolVar(&noColour, "no-colour", false, "disable coloured terminal output")
 	fs.BoolVar(&noColor, "no-color", false, "disable colored terminal output")
+	fs.StringVar(&saveDir, "save-dir", "", "override directory used by --save")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -63,6 +65,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	if envNoColor := strings.TrimSpace(os.Getenv("NO_COLOR")); envNoColor != "" {
 		noColour = true
+	}
+
+	if saveDir == "" {
+		saveDir = strings.TrimSpace(os.Getenv("GH_PR_COMMENTS_SAVE_DIR"))
 	}
 
 	colorEnabled := !noColour && isTerminalWriter(out)
@@ -199,7 +205,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if len(all) == 0 {
 			if save && len(errs) == 0 {
 				pruneAttempted = true
-				prunedFiles = pruneSavedComments(ctx, fetcher, repos, errOut)
+				prunedFiles = pruneSavedComments(ctx, fetcher, repos, saveDir, errOut)
 			}
 			if len(errs) > 0 {
 				return fmt.Errorf("list pull requests:\n%s", strings.Join(errs, "\n"))
@@ -207,7 +213,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			if len(repos) == 1 {
 				if pruneAttempted {
 					if len(prunedFiles) > 0 {
-						return fmt.Errorf("%w; removed stale saved comment files: %s", ghprcomments.ErrNoPullRequests, strings.Join(prunedFiles, ", "))
+						return fmt.Errorf("%w; removed stale saved comment files:\n%s", ghprcomments.ErrNoPullRequests, strings.Join(prunedFiles, "\n"))
 					}
 					return fmt.Errorf("%w; no stale saved comment files found", ghprcomments.ErrNoPullRequests)
 				}
@@ -276,7 +282,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("marshal JSON for save: %w", err)
 		}
-		savePath, err := ghprcomments.SaveOutput(repoRoot, prSummary, payload)
+		savePath, err := ghprcomments.SaveOutput(repoRoot, prSummary, payload, saveDir)
 		if err != nil {
 			return fmt.Errorf("save output: %w", err)
 		}
@@ -292,7 +298,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 			openPRs = nil
 		}
-		if _, pruneErr := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, repo, openPRs); pruneErr != nil {
+		if _, pruneErr := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, repo, openPRs, saveDir); pruneErr != nil {
 			fmt.Fprintf(errOut, "warning: prune skipped; %v\n", pruneErr)
 		}
 		return nil
@@ -346,7 +352,7 @@ func isTerminalWriter(w io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repos []ghprcomments.Repository, errOut io.Writer) []string {
+func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repos []ghprcomments.Repository, saveDir string, errOut io.Writer) []string {
 	if fetcher == nil || len(repos) == 0 {
 		return nil
 	}
@@ -393,7 +399,7 @@ func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repo
 			openPRs = nil
 		}
 
-		pruned, err := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, name, openPRs)
+		pruned, err := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, name, openPRs, saveDir)
 		if err != nil {
 			if errOut != nil {
 				fmt.Fprintf(errOut, "warning: prune skipped for %s/%s; %v\n", owner, name, err)
