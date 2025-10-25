@@ -6,7 +6,7 @@
 ## Key Features
 - Detects the current repo via `gh` and supports an interactive PR picker.
 - Streams unified JSON with bot tagging, optional flat array, or Markdown text output.
-- Can persist snapshots to `.pr-comments/PR_<number>_<branch>.json` for reuse.
+- Can persist snapshots to `.pr-comments/pr-<number>-<slug>.md` (Markdown with embedded JSON) for reuse.
 
 ## Prerequisites
 - Go 1.22+
@@ -20,7 +20,7 @@
 - `gh pr-comments -p <number>` to target a specific pull request
 - `gh pr-comments --flat` for a single JSON array of comments
 - `gh pr-comments --text` for Markdown output with HTML stripped
-- `gh pr-comments --save` to write the JSON payload under `.pr-comments/`
+- `gh pr-comments --save` to write a Markdown snapshot with embedded JSON under `.pr-comments/`
 - `gh pr-comments --no-colour` (or `--no-color`) to disable ANSI styling; also respects the `NO_COLOR` environment variable
 
 **zsh auto-correct:** If your shell prompts to correct `pr-comments` to `.pr-comments`, leave it as-is or add `alias gh='nocorrect gh'` (or disable `CORRECT`) in your shell config to silence the prompt.

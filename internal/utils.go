@@ -16,12 +16,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/go-github/v61/github"
 )
 
 var botRegex = regexp.MustCompile(`(?i)(copilot|compliance|security|dependabot|.*\[bot\])`)
 var htmlTagRegex = regexp.MustCompile(`(?s)<[^>]+>`)
+
+const savedOutputDir = ".pr-comments"
 
 // Repository represents a local git repository and its remote metadata.
 type Repository struct {
@@ -500,25 +503,161 @@ func findRepoRootAt(ctx context.Context, path string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// SaveOutput persists the rendered payload to the .pr-comments directory.
+// SaveOutput persists the rendered payload to the .pr-comments directory as Markdown.
 func SaveOutput(repoRoot string, pr *PullRequestSummary, payload []byte) (string, error) {
-	dir := filepath.Join(repoRoot, ".pr-comments")
+	if pr == nil || pr.Number <= 0 {
+		return "", errors.New("save requires a pull request with a number")
+	}
+
+	dir := filepath.Join(repoRoot, savedOutputDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 
-	number := 0
-	if pr != nil {
-		number = pr.Number
-	}
-
-	filename := fmt.Sprintf("PR_%d.json", number)
+	filename := fmt.Sprintf("pr-%d-%s.md", pr.Number, slugify(pr.Title, pr.HeadRef))
 	target := filepath.Join(dir, filename)
 
-	if err := os.WriteFile(target, payload, 0o644); err != nil {
+	content := buildFeedbackMarkdown(pr, payload)
+	if err := os.WriteFile(target, content, 0o644); err != nil {
 		return "", err
 	}
 	return target, nil
+}
+
+func buildFeedbackMarkdown(pr *PullRequestSummary, payload []byte) []byte {
+	var builder strings.Builder
+	builder.Grow(len(payload) + 256)
+
+	builder.WriteString("---\n")
+	builder.WriteString(fmt.Sprintf("pr_number: %d\n", pr.Number))
+	builder.WriteString("pr_title: ")
+	builder.WriteString(quoteYAMLString(pr.Title))
+	builder.WriteByte('\n')
+	builder.WriteString("repo_owner: ")
+	builder.WriteString(quoteYAMLString(pr.RepoOwner))
+	builder.WriteByte('\n')
+	builder.WriteString("repo_name: ")
+	builder.WriteString(quoteYAMLString(pr.RepoName))
+	builder.WriteByte('\n')
+	builder.WriteString("head_ref: ")
+	builder.WriteString(quoteYAMLString(pr.HeadRef))
+	builder.WriteByte('\n')
+	builder.WriteString("base_ref: ")
+	builder.WriteString(quoteYAMLString(pr.BaseRef))
+	builder.WriteByte('\n')
+	builder.WriteString("author: ")
+	builder.WriteString(quoteYAMLString(pr.Author))
+	builder.WriteByte('\n')
+	builder.WriteString("url: ")
+	builder.WriteString(quoteYAMLString(pr.URL))
+	builder.WriteByte('\n')
+	builder.WriteString("saved_at: ")
+	builder.WriteString(quoteYAMLString(time.Now().UTC().Format(time.RFC3339)))
+	builder.WriteString("\n---\n\n```json\n")
+	builder.Write(payload)
+	if len(payload) == 0 || payload[len(payload)-1] != '\n' {
+		builder.WriteByte('\n')
+	}
+	builder.WriteString("```\n")
+
+	return []byte(builder.String())
+}
+
+func slugify(primary, fallback string) string {
+	candidate := strings.TrimSpace(primary)
+	if candidate == "" {
+		candidate = strings.TrimSpace(fallback)
+	}
+	if candidate == "" {
+		candidate = "pr"
+	}
+	candidate = strings.ToLower(candidate)
+
+	var builder strings.Builder
+	prevHyphen := false
+	for _, r := range candidate {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			prevHyphen = false
+		case unicode.IsSpace(r) || r == '-' || r == '_' || r == '.':
+			if !prevHyphen && builder.Len() > 0 {
+				builder.WriteByte('-')
+				prevHyphen = true
+			}
+		default:
+			if builder.Len() == 0 {
+				continue
+			}
+			if !prevHyphen {
+				builder.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+		if builder.Len() >= 80 {
+			break
+		}
+	}
+
+	slug := strings.Trim(builder.String(), "-")
+	if slug == "" {
+		return "pr"
+	}
+	return slug
+}
+
+func quoteYAMLString(value string) string {
+	if value == "" {
+		return "\"\""
+	}
+
+	var builder strings.Builder
+	builder.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\', '"':
+			builder.WriteByte('\\')
+			builder.WriteRune(r)
+		case '\n':
+			builder.WriteString("\\n")
+		case '\r':
+			builder.WriteString("\\r")
+		case '\t':
+			builder.WriteString("\\t")
+		default:
+			if r < 0x20 || r > unicode.MaxASCII {
+				fmt.Fprintf(&builder, "\\u%04X", r)
+			} else {
+				builder.WriteRune(r)
+			}
+		}
+	}
+	builder.WriteByte('"')
+	return builder.String()
+}
+
+func extractPullRequestNumber(name string) (int, bool) {
+	if strings.HasPrefix(name, "pr-") && strings.HasSuffix(name, ".md") {
+		trimmed := strings.TrimSuffix(strings.TrimPrefix(name, "pr-"), ".md")
+		if trimmed == "" {
+			return 0, false
+		}
+		parts := strings.SplitN(trimmed, "-", 2)
+		num, err := strconv.Atoi(parts[0])
+		if err != nil || num <= 0 {
+			return 0, false
+		}
+		return num, true
+	}
+	if strings.HasPrefix(name, "PR_") && strings.HasSuffix(name, ".json") {
+		trimmed := strings.TrimSuffix(strings.TrimPrefix(name, "PR_"), ".json")
+		num, err := strconv.Atoi(trimmed)
+		if err != nil || num <= 0 {
+			return 0, false
+		}
+		return num, true
+	}
+	return 0, false
 }
 
 // PullRequestSummaryGetter exposes pull request lookups required for pruning.
@@ -532,7 +671,7 @@ func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGette
 		return errors.New("prune requires a pull request getter")
 	}
 
-	dir := filepath.Join(repoRoot, ".pr-comments")
+	dir := filepath.Join(repoRoot, savedOutputDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -555,12 +694,8 @@ func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGette
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, "PR_") || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		numStr := strings.TrimSuffix(strings.TrimPrefix(name, "PR_"), ".json")
-		num, convErr := strconv.Atoi(numStr)
-		if convErr != nil || num <= 0 {
+		num, ok := extractPullRequestNumber(name)
+		if !ok {
 			continue
 		}
 		if _, ok := openSet[num]; ok {
