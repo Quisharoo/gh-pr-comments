@@ -49,6 +49,7 @@ type PullRequestSummary struct {
 	BaseRef   string
 	RepoName  string
 	RepoOwner string
+	URL       string
 	LocalPath string `json:"-"`
 }
 
@@ -235,5 +236,6 @@ func summarizePullRequest(pr *github.PullRequest) *PullRequestSummary {
 		BaseRef:   baseRef,
 		RepoOwner: repoOwner,
 		RepoName:  repoName,
+		URL:       pr.GetHTMLURL(),
 	}
 }

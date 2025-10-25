@@ -45,13 +45,29 @@ func TestBuildOutputKeepsBotsAndCleansBody(t *testing.T) {
 	out := BuildOutput(pr, payload, NormalizationOptions{})
 
 	if len(out.Comments) != 2 {
-		t.Fatalf("expected 2 comments including bots, got %d", len(out.Comments))
+		t.Fatalf("expected 2 author groups including bots, got %d", len(out.Comments))
 	}
 
-	first := out.Comments[0]
-	if first.Author != "human" {
-		t.Fatalf("expected first comment author 'human', got %q", first.Author)
+	firstGroup := out.Comments[0]
+	if firstGroup.Author != "copilot[bot]" {
+		t.Fatalf("expected newest author group to be 'copilot[bot]', got %q", firstGroup.Author)
 	}
+	if len(firstGroup.Comments) != 1 {
+		t.Fatalf("expected bot to have 1 comment, got %d", len(firstGroup.Comments))
+	}
+	if firstGroup.Comments[0].BodyText != "bot noise" {
+		t.Fatalf("expected bot comment body preserved, got %q", firstGroup.Comments[0].BodyText)
+	}
+
+	secondGroup := out.Comments[1]
+	if secondGroup.Author != "human" {
+		t.Fatalf("expected second author group to be 'human', got %q", secondGroup.Author)
+	}
+	if len(secondGroup.Comments) != 1 {
+		t.Fatalf("expected human to have 1 comment, got %d", len(secondGroup.Comments))
+	}
+
+	first := secondGroup.Comments[0]
 	if first.Permalink != "https://github.com/org/repo/pull/1#issuecomment-1" {
 		t.Fatalf("expected permalink to be preserved, got %q", first.Permalink)
 	}
@@ -60,13 +76,5 @@ func TestBuildOutputKeepsBotsAndCleansBody(t *testing.T) {
 	}
 	if strings.Contains(first.BodyText, "```") || strings.Contains(first.BodyText, "# Heading") {
 		t.Fatalf("cleaned body should strip markdown artifacts, got %q", first.BodyText)
-	}
-
-	second := out.Comments[1]
-	if second.Author != "copilot[bot]" {
-		t.Fatalf("expected bot comment retained, got %q", second.Author)
-	}
-	if second.BodyText != "bot noise" {
-		t.Fatalf("expected bot comment body preserved, got %q", second.BodyText)
 	}
 }

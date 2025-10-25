@@ -225,7 +225,7 @@ func TestSelectWithPromptColourizedOutput(t *testing.T) {
 
 	expectedLine := fmt.Sprintf("%s %s%s - %s %s %s\n",
 		applyStyle(true, ansiDim, "[1]"),
-		applyStyle(true, ansiCyan, repoDisplay),
+		applyStyle(true, ansiBrightCyan, repoDisplay),
 		applyStyle(true, ansiYellow, "#10"),
 		"Colourful",
 		applyStyle(true, ansiMagenta, "[feature\u2192main]"),

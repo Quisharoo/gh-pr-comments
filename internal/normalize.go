@@ -14,7 +14,13 @@ import (
 // Output captures the unified payload for downstream use.
 type Output struct {
 	PR       PullRequestMetadata `json:"pr"`
-	Comments []Comment           `json:"comments"`
+	Comments []AuthorComments    `json:"comments"`
+}
+
+// AuthorComments groups comments by author for presentation.
+type AuthorComments struct {
+	Author   string    `json:"author"`
+	Comments []Comment `json:"comments"`
 }
 
 // PullRequestMetadata is serialized as part of the output contract.
@@ -24,8 +30,10 @@ type PullRequestMetadata struct {
 	Title     string    `json:"title"`
 	State     string    `json:"state"`
 	Author    string    `json:"author"`
+	URL       string    `json:"url"`
 	UpdatedAt time.Time `json:"updated_at"`
 	HeadRef   string    `json:"head_ref"`
+	BaseRef   string    `json:"base_ref"`
 }
 
 // Comment represents an individual review unit.
@@ -53,26 +61,71 @@ func BuildOutput(pr *PullRequestSummary, payload commentPayload, opts Normalizat
 		return Output{}
 	}
 
-	comments := make([]Comment, 0, len(payload.issueComments)+len(payload.reviewComments)+len(payload.reviews))
+	total := len(payload.issueComments) + len(payload.reviewComments) + len(payload.reviews)
+	grouped := make(map[string][]Comment, total)
 
 	for _, ic := range payload.issueComments {
 		comment := normalizeIssueComment(ic, opts)
-		comments = append(comments, comment)
+		author := comment.Author
+		grouped[author] = append(grouped[author], comment)
 	}
 
 	for _, rc := range payload.reviewComments {
 		comment := normalizeReviewComment(rc, opts)
-		comments = append(comments, comment)
+		author := comment.Author
+		grouped[author] = append(grouped[author], comment)
 	}
 
 	for _, review := range payload.reviews {
 		comment := normalizeReview(review, opts)
-		comments = append(comments, comment)
+		author := comment.Author
+		grouped[author] = append(grouped[author], comment)
 	}
 
-	sort.Slice(comments, func(i, j int) bool {
-		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+	authors := make([]string, 0, len(grouped))
+	for author := range grouped {
+		comments := grouped[author]
+		sort.SliceStable(comments, func(i, j int) bool {
+			ci := comments[i]
+			cj := comments[j]
+			if ci.CreatedAt.Equal(cj.CreatedAt) {
+				return ci.ID > cj.ID
+			}
+			return ci.CreatedAt.After(cj.CreatedAt)
+		})
+		grouped[author] = comments
+		authors = append(authors, author)
+	}
+
+	sort.SliceStable(authors, func(i, j int) bool {
+		ai := grouped[authors[i]]
+		aj := grouped[authors[j]]
+
+		var ti time.Time
+		if len(ai) > 0 {
+			ti = ai[0].CreatedAt
+		}
+		var tj time.Time
+		if len(aj) > 0 {
+			tj = aj[0].CreatedAt
+		}
+
+		if ti.Equal(tj) {
+			return strings.ToLower(authors[i]) < strings.ToLower(authors[j])
+		}
+		return ti.After(tj)
 	})
+
+	commentGroups := make([]AuthorComments, 0, len(authors))
+	for _, author := range authors {
+		slice := grouped[author]
+		clone := make([]Comment, len(slice))
+		copy(clone, slice)
+		commentGroups = append(commentGroups, AuthorComments{
+			Author:   author,
+			Comments: clone,
+		})
+	}
 
 	repo := pr.RepoOwner
 	if pr.RepoName != "" {
@@ -84,21 +137,24 @@ func BuildOutput(pr *PullRequestSummary, payload commentPayload, opts Normalizat
 		Number:    pr.Number,
 		Title:     pr.Title,
 		State:     pr.State,
-		Author:    pr.Author,
+		Author:    canonicalAuthor(pr.Author),
+		URL:       pr.URL,
 		UpdatedAt: pr.Updated,
 		HeadRef:   pr.HeadRef,
+		BaseRef:   pr.BaseRef,
 	}
 
-	return Output{PR: meta, Comments: comments}
+	return Output{PR: meta, Comments: commentGroups}
 }
 
 func normalizeIssueComment(c *github.IssueComment, opts NormalizationOptions) Comment {
 	body := cleanCommentBody(c.GetBody(), opts)
+	author := canonicalAuthor(safeLogin(c.GetUser()))
 
 	return Comment{
 		Type:      "issue",
 		ID:        c.GetID(),
-		Author:    safeLogin(c.GetUser()),
+		Author:    author,
 		IsBot:     IsBotAuthor(c.GetUser()),
 		CreatedAt: derefTimestamp(c.CreatedAt),
 		BodyText:  body,
@@ -108,6 +164,7 @@ func normalizeIssueComment(c *github.IssueComment, opts NormalizationOptions) Co
 
 func normalizeReviewComment(c *github.PullRequestComment, opts NormalizationOptions) Comment {
 	body := cleanCommentBody(c.GetBody(), opts)
+	author := canonicalAuthor(safeLogin(c.GetUser()))
 
 	var linePtr *int
 	if c.Line != nil {
@@ -118,7 +175,7 @@ func normalizeReviewComment(c *github.PullRequestComment, opts NormalizationOpti
 	return Comment{
 		Type:      "review_comment",
 		ID:        c.GetID(),
-		Author:    safeLogin(c.GetUser()),
+		Author:    author,
 		IsBot:     IsBotAuthor(c.GetUser()),
 		CreatedAt: derefTimestamp(c.CreatedAt),
 		Path:      c.GetPath(),
@@ -130,11 +187,12 @@ func normalizeReviewComment(c *github.PullRequestComment, opts NormalizationOpti
 
 func normalizeReview(r *github.PullRequestReview, opts NormalizationOptions) Comment {
 	body := cleanCommentBody(r.GetBody(), opts)
+	author := canonicalAuthor(safeLogin(r.GetUser()))
 
 	return Comment{
 		Type:      "review_event",
 		ID:        r.GetID(),
-		Author:    safeLogin(r.GetUser()),
+		Author:    author,
 		IsBot:     IsBotAuthor(r.GetUser()),
 		CreatedAt: derefTimestamp(r.SubmittedAt),
 		State:     r.GetState(),
@@ -269,4 +327,12 @@ func hostFromURL(raw string) string {
 		return ""
 	}
 	return strings.TrimSpace(parsed.Host)
+}
+
+func canonicalAuthor(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed != "" {
+		return trimmed
+	}
+	return "(unknown)"
 }

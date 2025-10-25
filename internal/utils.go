@@ -272,7 +272,7 @@ func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer, op
 		updatedPart := fmt.Sprintf("updated %s", updated)
 
 		indexPart = applyStyle(opts.Colorize, ansiDim, indexPart)
-		repoPart = applyStyle(opts.Colorize, ansiCyan, repoPart)
+		repoPart = applyStyle(opts.Colorize, ansiBrightCyan, repoPart)
 		numberPart = applyStyle(opts.Colorize, ansiYellow, numberPart)
 		branchPart = applyStyle(opts.Colorize, ansiMagenta, branchPart)
 		updatedPart = applyStyle(opts.Colorize, ansiDim, updatedPart)
