@@ -251,7 +251,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 				return fmt.Errorf("find repo root: %w", err)
 			}
 		}
-		payload, err := ghprcomments.MarshalJSON(output, false)
+		payload, err := ghprcomments.MarshalJSON(output, flat)
 		if err != nil {
 			return fmt.Errorf("marshal JSON for save: %w", err)
 		}
