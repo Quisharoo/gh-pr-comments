@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -193,14 +194,23 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			all = append(all, prs...)
 		}
 
+		var prunedFiles []string
+		var pruneAttempted bool
 		if len(all) == 0 {
 			if save && len(errs) == 0 {
-				pruneSavedComments(ctx, fetcher, repos, errOut)
+				pruneAttempted = true
+				prunedFiles = pruneSavedComments(ctx, fetcher, repos, errOut)
 			}
 			if len(errs) > 0 {
 				return fmt.Errorf("list pull requests:\n%s", strings.Join(errs, "\n"))
 			}
 			if len(repos) == 1 {
+				if pruneAttempted {
+					if len(prunedFiles) > 0 {
+						return fmt.Errorf("%w; removed stale saved comment files: %s", ghprcomments.ErrNoPullRequests, strings.Join(prunedFiles, ", "))
+					}
+					return fmt.Errorf("%w; no stale saved comment files found", ghprcomments.ErrNoPullRequests)
+				}
 				return ghprcomments.ErrNoPullRequests
 			}
 			return errors.New("no open pull requests found across discovered repositories")
@@ -282,7 +292,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 			openPRs = nil
 		}
-		if pruneErr := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, repo, openPRs); pruneErr != nil {
+		if _, pruneErr := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, repo, openPRs); pruneErr != nil {
 			fmt.Fprintf(errOut, "warning: prune skipped; %v\n", pruneErr)
 		}
 		return nil
@@ -336,11 +346,13 @@ func isTerminalWriter(w io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repos []ghprcomments.Repository, errOut io.Writer) {
+func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repos []ghprcomments.Repository, errOut io.Writer) []string {
 	if fetcher == nil || len(repos) == 0 {
-		return
+		return nil
 	}
 
+	removedSet := make(map[string]struct{})
+	var removed []string
 	seen := make(map[string]struct{})
 	for _, repo := range repos {
 		owner := strings.TrimSpace(repo.Owner)
@@ -381,10 +393,29 @@ func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repo
 			openPRs = nil
 		}
 
-		if err := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, name, openPRs); err != nil {
+		pruned, err := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, name, openPRs)
+		if err != nil {
 			if errOut != nil {
 				fmt.Fprintf(errOut, "warning: prune skipped for %s/%s; %v\n", owner, name, err)
 			}
+			continue
+		}
+
+		for _, filePath := range pruned {
+			display := filePath
+			if rel, relErr := filepath.Rel(repoRoot, filePath); relErr == nil {
+				display = fmt.Sprintf("%s/%s:%s", owner, name, filepath.ToSlash(rel))
+			}
+			if _, seenFile := removedSet[display]; seenFile {
+				continue
+			}
+			removedSet[display] = struct{}{}
+			removed = append(removed, display)
 		}
 	}
+
+	if removed == nil {
+		return []string{}
+	}
+	return removed
 }
