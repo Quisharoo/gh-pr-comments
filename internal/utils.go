@@ -519,3 +519,70 @@ func SaveOutput(repoRoot string, pr *PullRequestSummary, payload []byte) (string
 	}
 	return target, nil
 }
+
+// PullRequestSummaryGetter exposes pull request lookups required for pruning.
+type PullRequestSummaryGetter interface {
+	GetPullRequestSummary(ctx context.Context, owner, repo string, number int) (*PullRequestSummary, error)
+}
+
+// PruneStaleSavedComments removes saved comment files for pull requests that are no longer open.
+func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGetter, repoRoot, owner, repo string, open []*PullRequestSummary) error {
+	if getter == nil {
+		return errors.New("prune requires a pull request getter")
+	}
+
+	dir := filepath.Join(repoRoot, ".pr-comments")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	openSet := make(map[int]struct{}, len(open))
+	for _, pr := range open {
+		if pr == nil {
+			continue
+		}
+		openSet[pr.Number] = struct{}{}
+	}
+
+	var errs []error
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "PR_") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		numStr := strings.TrimSuffix(strings.TrimPrefix(name, "PR_"), ".json")
+		num, convErr := strconv.Atoi(numStr)
+		if convErr != nil || num <= 0 {
+			continue
+		}
+		if _, ok := openSet[num]; ok {
+			continue
+		}
+
+		summary, fetchErr := getter.GetPullRequestSummary(ctx, owner, repo, num)
+		if fetchErr != nil {
+			errs = append(errs, fmt.Errorf("fetch pull request #%d: %w", num, fetchErr))
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(summary.State), "open") {
+			continue
+		}
+
+		filePath := filepath.Join(dir, name)
+		if remErr := os.Remove(filePath); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", filePath, remErr))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
