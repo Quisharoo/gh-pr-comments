@@ -6,14 +6,14 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 ---
 
 ## Tech Stack
-- **Language:** Go 1.24+
-- **Authentication:** `GH_TOKEN` / `GITHUB_TOKEN` environment variables, with fallback to `gh auth token`
-- **GitHub API:** `google/go-github/v61` with `golang.org/x/oauth2`
-- **Terminal:** `golang.org/x/term` for TTY detection and color support
+- **Language:** Go (modern stable version)
+- **Authentication:** GitHub token via environment variables or `gh` CLI
+- **GitHub API:** Official Go client library with OAuth2 support
+- **Terminal:** Standard library TTY detection and color support
 - **Optional runtime dependencies:**
-  - `fzf` for interactive PR selection (graceful fallback to numbered prompt)
+  - `fzf` for interactive selection (graceful fallback to numbered prompts)
   - `jq` for JSON post-processing
-- **Distribution:** `gh` extension binary (`gh-pr-comments`)
+- **Distribution:** `gh` extension binary
 
 ---
 
@@ -22,65 +22,54 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 ### Directory Structure
 ```
 .
-├── cmd/
-│   └── main.go              # CLI entry point, flag parsing, I/O wiring
-├── internal/
-│   ├── api.go               # GitHub REST client, PR/comment fetching
-│   ├── normalize.go         # Comment aggregation, grouping, sorting
-│   ├── render.go            # JSON/Markdown output formatting
-│   ├── colorize.go          # ANSI color application for terminal output
-│   ├── ansi.go              # ANSI color code definitions
-│   ├── utils.go             # Repository detection, file I/O, helpers
-│   ├── *_test.go            # Unit tests for each module
-│   └── repo_detect_test.go  # Repository detection integration tests
+├── cmd/                     # CLI entry point and command-line interface
+├── internal/                # Core business logic modules
+│   ├── API layer           # GitHub client and data fetching
+│   ├── Normalization       # Comment aggregation and processing
+│   ├── Rendering           # Output formatting (JSON, Markdown)
+│   ├── Colorization        # Terminal color support
+│   └── Utilities           # Repository detection, file I/O, helpers
 ├── extension.yml            # gh extension metadata
-├── go.mod                   # Go module definition
-├── go.sum                   # Dependency checksums
+├── go.mod/go.sum            # Go module definition
 ├── PRD.md                   # Product requirements document
 ├── AGENTS.md                # This file: coding guidelines & architecture
 └── README.md                # User-facing documentation
 ```
 
-### Module Responsibilities
+### Architectural Layers
 
-#### `cmd/main.go`
-- Parse command-line flags (`-p`, `--flat`, `--text`, `--save`, `--strip-html`, `--no-color`)
-- Detect repositories via `internal.DetectRepositories`
-- Handle multi-repository disambiguation
-- Wire stdin/stdout/stderr to internal functions
-- Exit cleanly with error codes
+#### CLI Layer (`cmd/`)
+- Command-line flag parsing and validation
+- Repository detection and disambiguation
+- I/O orchestration (stdin/stdout/stderr)
+- Error code handling and graceful exits
 
-#### `internal/api.go`
-- `NewGitHubClient`: Create authenticated GitHub REST client (GitHub.com or Enterprise)
-- `Fetcher`: Bundle GitHub operations
-- `FetchComments`: Paginate through issue comments, review comments, and reviews
-- `ListPullRequestSummaries`: List open PRs for repository
-- `GetPullRequestSummary`: Retrieve PR metadata
+#### API Layer (`internal/`)
+- Authenticated GitHub REST client creation (GitHub.com and Enterprise)
+- PR and comment data fetching with full pagination
+- Rate limit handling and error recovery
 
-#### `internal/normalize.go`
-- `BuildOutput`: Aggregate and group comments by author
-- `NormalizationOptions`: Control HTML stripping and other processing
-- Group comments: issue comments, review comments, review events
-- Sort comments chronologically
-- Tag bot accounts via regex matching
+#### Normalization Layer (`internal/`)
+- Comment aggregation from multiple sources (issue comments, review comments, review events)
+- Author-based grouping and chronological sorting
+- Bot detection and tagging
+- HTML stripping and content processing
 
-#### `internal/render.go`
-- `MarshalJSON`: Produce nested or flat JSON output
-- `RenderMarkdown`: Generate human-readable review summary
-- Escape Markdown special characters
-- Format timestamps consistently
+#### Rendering Layer (`internal/`)
+- JSON output (nested and flat structures)
+- Markdown formatting for human readability
+- Character escaping and timestamp normalization
 
-#### `internal/colorize.go`
-- `ColouriseJSONComments`: Apply ANSI color codes to JSON output
-- Terminal detection and `NO_COLOR` environment variable support
-- Syntax highlighting for better terminal readability
+#### Colorization Layer (`internal/`)
+- ANSI color code application for terminal output
+- TTY detection and `NO_COLOR` environment variable support
+- Syntax highlighting for enhanced readability
 
-#### `internal/utils.go`
-- `DetectRepositories`: Discover repositories via `GH_REPO`, `gh`, or git remotes
-- `FindRepoRoot`: Locate git repository root directory
-- `SaveOutput`: Write JSON to `.pr-comments/` directory
-- `SelectPullRequestWithOptions`: Interactive or fallback PR selection
-- Bot detection regex and HTML stripping utilities
+#### Utilities Layer (`internal/`)
+- Repository discovery (environment variables, `gh` CLI, git remotes)
+- Git repository root detection
+- File persistence to standard output directories
+- Interactive and fallback PR selection modes
 
 ---
 
@@ -94,37 +83,31 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 - **Completeness over speed:** Always paginate to completion; check `resp.NextPage`
 
 ### Code Organization
-- One file per functional area (API, normalization, rendering, utilities)
-- Corresponding test file (`*_test.go`) for each module
+- One file per functional area (clear separation of concerns)
+- Corresponding test files for each module
 - Exported types and functions use clear, descriptive names
-- Internal helpers remain unexported (lowercase)
+- Internal helpers remain unexported
 
 ### Data Contracts
-- **`Output` struct:** Primary contract for PR + comments
-  ```go
-  type Output struct {
-      PR       PullRequestMetadata `json:"pr"`
-      Comments []AuthorComments    `json:"comments"`
-  }
-  ```
+- **Primary output structure:** PR metadata + grouped author comments
 - **Schema stability:** Changes to JSON output require PRD update
 - **Backward compatibility:** Maintain existing field names and structure
 
 ### Dependencies
 - Prefer standard library over external packages
-- No CLI frameworks (only `flag` package)
-- No HTML parsers (use minimal regex for tag stripping)
-- Pin major versions in `go.mod`
+- Use standard library flag parsing (no CLI frameworks)
+- Minimal external dependencies for non-core functionality
+- Pin major versions to ensure stability
 
 ### File I/O
-- Never hardcode paths; derive `.pr-comments/` from repository root
-- Use `os.MkdirAll` with `0755` for directory creation
+- Never hardcode paths; derive from repository root
+- Use standard directory creation with appropriate permissions
 - Write files atomically where possible
 - UTF-8 encoding only
 
 ### Error Messages
-- User-facing errors must be actionable (e.g., "run `gh auth login`")
-- Include context in wrapped errors: `fmt.Errorf("fetch comments: %w", err)`
+- User-facing errors must be actionable with clear remediation steps
+- Include context in wrapped errors for debugging
 - Distinguish authentication, network, and API errors
 
 ---
@@ -138,26 +121,22 @@ Go-based GitHub CLI extension that retrieves and normalizes all comments on a pu
 - Test error paths and edge cases (empty PRs, no comments, pagination)
 
 ### Testing Commands
-```bash
-go test ./...                    # Run all tests
-go test -v ./internal            # Verbose test output
-go test -race ./...              # Race condition detection
-go test -cover ./...             # Coverage report
-```
+Standard Go testing tools:
+- Run all tests with race detection
+- Generate coverage reports
+- Verbose output for debugging
 
 ### Code Quality
-```bash
-gofmt -s -w .                    # Format code
-go vet ./...                     # Static analysis
-staticcheck ./...                # Advanced linting (if available)
-golangci-lint run                # Comprehensive linting (if configured)
-```
+Standard Go toolchain:
+- Code formatting with `gofmt`
+- Static analysis with `go vet`
+- Additional linters as configured
 
 ### Validation Checklist
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` produces no warnings
-- [ ] `gofmt -d .` shows no diff
-- [ ] Binary builds successfully: `go build -o gh-pr-comments ./cmd`
+- [ ] All tests pass
+- [ ] Static analysis produces no warnings
+- [ ] Code is properly formatted
+- [ ] Binary builds successfully
 - [ ] Manual smoke test completed (see Contribution Rules)
 
 ---
@@ -216,21 +195,7 @@ Each change should include either:
 - **Explicit manual test steps:** Terminal commands demonstrating the feature
 - **"Not applicable" note:** If change is internal refactor or documentation-only
 
-Example:
-```bash
-# Test interactive PR selection with color output
-gh pr-comments
-
-# Test flat JSON output for a specific PR
-gh pr-comments -p 42 --flat
-
-# Test Markdown rendering with HTML stripped
-gh pr-comments -p 42 --text
-
-# Test saving to disk
-gh pr-comments -p 42 --save
-ls .pr-comments/
-```
+Validate key workflows such as interactive selection, output format variations, and file persistence.
 
 ### Documentation
 - Update `README.md` for new user-facing flags or features
@@ -248,28 +213,28 @@ ls .pr-comments/
 ## Extending the Codebase
 
 ### Adding New Flags
-1. Define flag in `cmd/main.go` with `fs.*Var()`
-2. Pass value to appropriate `internal/` function
-3. Document in `README.md` usage section
-4. Add test case covering the flag behavior
+1. Define flag in CLI layer with appropriate parser
+2. Pass value to business logic layer
+3. Document in user-facing documentation
+4. Add test coverage for flag behavior
 
 ### Adding New Output Formats
-1. Add rendering function in `internal/render.go`
-2. Export format via new flag (e.g., `--format=yaml`)
-3. Update `Output` contract if schema changes
+1. Add rendering function in rendering layer
+2. Export format via new flag
+3. Update data contracts if schema changes
 4. Add golden snapshot tests for format stability
 
 ### Adding New Comment Sources
-1. Add fetch function in `internal/api.go`
-2. Integrate into `FetchComments` aggregation logic
-3. Update `internal/normalize.go` to handle new comment type
+1. Add fetch function in API layer
+2. Integrate into comment aggregation pipeline
+3. Update normalization layer to handle new comment type
 4. Add tests with mock API responses
-5. Update `PRD.md` functional requirements
+5. Update PRD functional requirements
 
 ### Adding New Filtering/Sorting
-1. Add filter/sort options to `NormalizationOptions` in `internal/normalize.go`
-2. Implement logic in `BuildOutput` or helper functions
-3. Expose via CLI flag in `cmd/main.go`
+1. Add filter/sort options to normalization configuration
+2. Implement logic in normalization layer
+3. Expose via CLI flag
 4. Add table-driven tests for filter/sort combinations
 
 ---
@@ -277,30 +242,23 @@ ls .pr-comments/
 ## Operational Guidelines
 
 ### Debugging
-- Enable verbose output with custom `DEBUG` env var (future consideration)
-- Use `--save` to persist output for inspection
-- Check `gh auth status` for authentication issues
-- Test with `GH_HOST` for GitHub Enterprise scenarios
+- Use save-to-disk functionality to persist output for inspection
+- Verify authentication status with `gh` CLI
+- Test GitHub Enterprise scenarios with host environment variable
 
 ### Common Issues
 | Issue | Diagnosis | Solution |
 |-------|-----------|----------|
-| "GH_TOKEN not set" | Missing authentication | Run `gh auth login` |
-| "no repositories found" | Not in git directory | `cd` into repository |
-| "pull request #N not found" | Wrong repo or invalid PR | Omit `-p` flag to list PRs interactively |
-| Rate limit exceeded | Too many API calls | Wait or use authenticated token with higher limits |
-| Colors not appearing | Terminal not detected or `NO_COLOR` set | Check `isTerminalWriter` logic; unset `NO_COLOR` |
+| Authentication errors | Missing or invalid token | Configure authentication via `gh` CLI |
+| Repository not found | Not in git directory | Navigate into repository directory |
+| PR not found | Wrong repo or invalid number | Use interactive selection to list available PRs |
+| Rate limit exceeded | Too many API calls | Wait for limit reset or use authenticated token |
+| Missing colors | Terminal not detected | Check TTY detection or `NO_COLOR` environment variable |
 
 ### Performance Profiling
-```bash
-# CPU profiling
-go test -cpuprofile=cpu.prof -bench=. ./internal
-go tool pprof cpu.prof
-
-# Memory profiling
-go test -memprofile=mem.prof -bench=. ./internal
-go tool pprof mem.prof
-```
+Use standard Go profiling tools for CPU and memory analysis:
+- Generate profiles with test benchmarks
+- Analyze with `pprof` tooling
 
 ---
 
