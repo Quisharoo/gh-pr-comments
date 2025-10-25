@@ -336,12 +336,12 @@ func isTerminalWriter(w io.Writer) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func pruneSavedComments(ctx context.Context, getter ghprcomments.PullRequestSummaryGetter, repos []ghprcomments.Repository, errOut io.Writer) {
-	if getter == nil || len(repos) == 0 {
+func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repos []ghprcomments.Repository, errOut io.Writer) {
+	if fetcher == nil || len(repos) == 0 {
 		return
 	}
 
-	seen := make(map[string]struct{}, len(repos))
+	seen := make(map[string]struct{})
 	for _, repo := range repos {
 		owner := strings.TrimSpace(repo.Owner)
 		name := strings.TrimSpace(repo.Name)
@@ -370,7 +370,18 @@ func pruneSavedComments(ctx context.Context, getter ghprcomments.PullRequestSumm
 		}
 		seen[key] = struct{}{}
 
-		if err := ghprcomments.PruneStaleSavedComments(ctx, getter, repoRoot, owner, name, nil); err != nil {
+		openPRs, err := fetcher.ListPullRequestSummaries(ctx, owner, name)
+		if err != nil {
+			if !errors.Is(err, ghprcomments.ErrNoPullRequests) {
+				if errOut != nil {
+					fmt.Fprintf(errOut, "warning: prune skipped for %s/%s; %v\n", owner, name, err)
+				}
+				continue
+			}
+			openPRs = nil
+		}
+
+		if err := ghprcomments.PruneStaleSavedComments(ctx, fetcher, repoRoot, owner, name, openPRs); err != nil {
 			if errOut != nil {
 				fmt.Fprintf(errOut, "warning: prune skipped for %s/%s; %v\n", owner, name, err)
 			}
