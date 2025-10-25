@@ -194,6 +194,9 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 
 		if len(all) == 0 {
+			if save && len(errs) == 0 {
+				pruneSavedComments(ctx, fetcher, repos, errOut)
+			}
 			if len(errs) > 0 {
 				return fmt.Errorf("list pull requests:\n%s", strings.Join(errs, "\n"))
 			}
@@ -331,4 +334,46 @@ func isTerminalWriter(w io.Writer) bool {
 		return false
 	}
 	return term.IsTerminal(int(file.Fd()))
+}
+
+func pruneSavedComments(ctx context.Context, getter ghprcomments.PullRequestSummaryGetter, repos []ghprcomments.Repository, errOut io.Writer) {
+	if getter == nil || len(repos) == 0 {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(repos))
+	for _, repo := range repos {
+		owner := strings.TrimSpace(repo.Owner)
+		name := strings.TrimSpace(repo.Name)
+		if owner == "" || name == "" {
+			if errOut != nil {
+				fmt.Fprintf(errOut, "warning: prune skipped; repository metadata incomplete for %q\n", strings.TrimSpace(repo.Path))
+			}
+			continue
+		}
+
+		repoRoot := strings.TrimSpace(repo.Path)
+		if repoRoot == "" {
+			root, err := ghprcomments.FindRepoRoot(ctx)
+			if err != nil {
+				if errOut != nil {
+					fmt.Fprintf(errOut, "warning: prune skipped for %s/%s; %v\n", owner, name, err)
+				}
+				continue
+			}
+			repoRoot = root
+		}
+
+		key := repoRoot + "|" + owner + "|" + name
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		if err := ghprcomments.PruneStaleSavedComments(ctx, getter, repoRoot, owner, name, nil); err != nil {
+			if errOut != nil {
+				fmt.Fprintf(errOut, "warning: prune skipped for %s/%s; %v\n", owner, name, err)
+			}
+		}
+	}
 }

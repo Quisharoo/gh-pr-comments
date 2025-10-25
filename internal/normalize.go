@@ -13,8 +13,9 @@ import (
 
 // Output captures the unified payload for downstream use.
 type Output struct {
-	PR       PullRequestMetadata `json:"pr"`
-	Comments []AuthorComments    `json:"comments"`
+	PR           PullRequestMetadata `json:"pr"`
+	CommentCount int                 `json:"comment_count"`
+	Comments     []AuthorComments    `json:"comments"`
 }
 
 // AuthorComments groups comments by author for presentation.
@@ -144,7 +145,7 @@ func BuildOutput(pr *PullRequestSummary, payload commentPayload, opts Normalizat
 		BaseRef:   pr.BaseRef,
 	}
 
-	return Output{PR: meta, Comments: commentGroups}
+	return Output{PR: meta, CommentCount: total, Comments: commentGroups}
 }
 
 func normalizeIssueComment(c *github.IssueComment, opts NormalizationOptions) Comment {
