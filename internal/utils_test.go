@@ -249,7 +249,7 @@ func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
 	repoRoot := t.TempDir()
 	pr := &PullRequestSummary{
 		Number:    123,
-		Title:     "Add Feature",
+		Title:     "Add Feature 🚀",
 		HeadRef:   "feature/add-feature",
 		BaseRef:   "main",
 		RepoOwner: "octo",
@@ -281,14 +281,20 @@ func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
 	if !strings.Contains(content, "pr_number: 123") {
 		t.Fatalf("front matter missing pr_number: %q", content)
 	}
-	if !strings.Contains(content, `pr_title: "Add Feature"`) {
+	if !strings.Contains(content, `pr_title: "Add Feature 🚀"`) {
 		t.Fatalf("front matter missing pr_title: %q", content)
 	}
-	if !strings.Contains(content, `repo_owner: "octo"`) || !strings.Contains(content, `repo_name: "repo"`) {
-		t.Fatalf("front matter missing repo metadata: %q", content)
+	if !strings.Contains(content, `repo_owner: "octo"`) {
+		t.Fatalf("front matter missing repo_owner: %q", content)
 	}
-	if !strings.Contains(content, `head_ref: "feature/add-feature"`) || !strings.Contains(content, `base_ref: "main"`) {
-		t.Fatalf("front matter missing ref metadata: %q", content)
+	if !strings.Contains(content, `repo_name: "repo"`) {
+		t.Fatalf("front matter missing repo_name: %q", content)
+	}
+	if !strings.Contains(content, `head_ref: "feature/add-feature"`) {
+		t.Fatalf("front matter missing head_ref: %q", content)
+	}
+	if !strings.Contains(content, `base_ref: "main"`) {
+		t.Fatalf("front matter missing base_ref: %q", content)
 	}
 	if !strings.Contains(content, `author: "tester"`) {
 		t.Fatalf("front matter missing author: %q", content)

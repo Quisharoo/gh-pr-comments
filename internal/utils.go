@@ -526,7 +526,7 @@ func SaveOutput(repoRoot string, pr *PullRequestSummary, payload []byte) (string
 
 func buildFeedbackMarkdown(pr *PullRequestSummary, payload []byte) []byte {
 	var builder strings.Builder
-	builder.Grow(len(payload) + 256)
+	builder.Grow(len(payload) + 512)
 
 	builder.WriteString("---\n")
 	builder.WriteString(fmt.Sprintf("pr_number: %d\n", pr.Number))
@@ -607,33 +607,7 @@ func slugify(primary, fallback string) string {
 }
 
 func quoteYAMLString(value string) string {
-	if value == "" {
-		return "\"\""
-	}
-
-	var builder strings.Builder
-	builder.WriteByte('"')
-	for _, r := range value {
-		switch r {
-		case '\\', '"':
-			builder.WriteByte('\\')
-			builder.WriteRune(r)
-		case '\n':
-			builder.WriteString("\\n")
-		case '\r':
-			builder.WriteString("\\r")
-		case '\t':
-			builder.WriteString("\\t")
-		default:
-			if r < 0x20 || r > unicode.MaxASCII {
-				fmt.Fprintf(&builder, "\\u%04X", r)
-			} else {
-				builder.WriteRune(r)
-			}
-		}
-	}
-	builder.WriteByte('"')
-	return builder.String()
+	return strconv.Quote(value)
 }
 
 func extractPullRequestNumber(name string) (int, bool) {
