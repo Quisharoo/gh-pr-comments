@@ -3,6 +3,8 @@ package ghprcomments
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -236,5 +238,61 @@ func TestSelectWithPromptColourizedOutput(t *testing.T) {
 
 	if got := output.String(); got != expected {
 		t.Fatalf("unexpected coloured prompt output.\nwant: %q\n got: %q", expected, got)
+	}
+}
+
+func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
+	repoRoot := t.TempDir()
+	pr := &PullRequestSummary{Number: 123, HeadRef: "feature/add-feature"}
+	payload := []byte(`{"ok":true}`)
+
+	path, err := SaveOutput(repoRoot, pr, payload)
+	if err != nil {
+		t.Fatalf("SaveOutput returned error: %v", err)
+	}
+
+	dir := filepath.Join(repoRoot, ".pr-comments")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("expected directory %s to exist", dir)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read saved payload: %v", err)
+	}
+	if string(data) != string(payload) {
+		t.Fatalf("payload mismatch: got %q want %q", string(data), string(payload))
+	}
+
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "PR_123_feature_add-feature_") {
+		t.Fatalf("unexpected filename %q", base)
+	}
+}
+
+func TestSaveOutputProducesUniqueFilenames(t *testing.T) {
+	repoRoot := t.TempDir()
+	pr := &PullRequestSummary{Number: 5, HeadRef: "feature"}
+	payload := []byte("payload")
+
+	first, err := SaveOutput(repoRoot, pr, payload)
+	if err != nil {
+		t.Fatalf("first SaveOutput returned error: %v", err)
+	}
+
+	second, err := SaveOutput(repoRoot, pr, payload)
+	if err != nil {
+		t.Fatalf("second SaveOutput returned error: %v", err)
+	}
+
+	if first == second {
+		t.Fatalf("expected unique filenames, got %q", first)
+	}
+
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("first file missing: %v", err)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Fatalf("second file missing: %v", err)
 	}
 }
