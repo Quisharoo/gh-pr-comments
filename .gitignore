@@ -21,6 +21,7 @@ dist/
 *.exe
 coverage.out
 vendor/
+gh-pr-comments
 
 # Cursor
 # Exclude user storage except the User/ settings we track
