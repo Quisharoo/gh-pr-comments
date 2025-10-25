@@ -49,6 +49,9 @@ func TestBuildOutputKeepsBotsAndCleansBody(t *testing.T) {
 	if len(out.Comments) != 2 {
 		t.Fatalf("expected 2 author groups including bots, got %d", len(out.Comments))
 	}
+	if out.CommentCount != 2 {
+		t.Fatalf("expected comment count to be 2, got %d", out.CommentCount)
+	}
 
 	firstGroup := out.Comments[0]
 	if firstGroup.Author != "copilot[bot]" {
