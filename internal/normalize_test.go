@@ -1,6 +1,8 @@
 package ghprcomments
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,5 +78,26 @@ func TestBuildOutputKeepsBotsAndCleansBody(t *testing.T) {
 	}
 	if strings.Contains(first.BodyText, "```") || strings.Contains(first.BodyText, "# Heading") {
 		t.Fatalf("cleaned body should strip markdown artifacts, got %q", first.BodyText)
+	}
+}
+
+func TestCleanCommentBodyPreservesDetailsContent(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "example_bot_feedback.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	body := string(data)
+	got := cleanCommentBody(body, NormalizationOptions{})
+	checks := []string{
+		"Prevent overwriting a generic file",
+		"Return an error in SaveOutput",
+		"Suggestion importance[1-10]: 8",
+		"Why: The suggestion correctly identifies a valid edge case",
+	}
+
+	for _, want := range checks {
+		if !strings.Contains(got, want) {
+			t.Errorf("cleaned body missing %q in %q", want, got)
+		}
 	}
 }
