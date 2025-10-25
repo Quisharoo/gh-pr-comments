@@ -257,6 +257,7 @@ Validate key workflows such as interactive selection, output format variations, 
 | PR not found | Wrong repo or invalid number | Use interactive selection to list available PRs |
 | Rate limit exceeded | Too many API calls | Wait for limit reset or use authenticated token |
 | Missing colors | Terminal not detected | Check TTY detection or `NO_COLOR` environment variable |
+| zsh autocorrect prompts | Shell tries to replace `pr-comments` with `.pr-comments` | Add `alias gh='nocorrect gh'` or disable `CORRECT` for gh commands |
 
 ### Performance Profiling
 Use standard Go profiling tools for CPU and memory analysis:

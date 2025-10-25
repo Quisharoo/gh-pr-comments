@@ -23,6 +23,8 @@
 - `gh pr-comments --save` to write the JSON payload under `.pr-comments/`
 - `gh pr-comments --no-colour` (or `--no-color`) to disable ANSI styling; also respects the `NO_COLOR` environment variable
 
+**zsh auto-correct:** If your shell prompts to correct `pr-comments` to `.pr-comments`, leave it as-is or add `alias gh='nocorrect gh'` (or disable `CORRECT`) in your shell config to silence the prompt.
+
 ## Development
 - `go test ./...` to run unit tests
 - `make lint` for the vet/staticcheck bundle
