@@ -136,8 +136,9 @@ Standard Go toolchain:
 - [ ] All tests pass
 - [ ] Static analysis produces no warnings
 - [ ] Code is properly formatted
-- [ ] Binary builds successfully
-- [ ] Manual smoke test completed (see Contribution Rules)
+- [ ] Binary builds successfully: `go build -o gh-pr-comments ./cmd`
+- [ ] Extension installed and tested: `gh extension install . && gh pr-comments`
+- [ ] Manual smoke test completed with real repository
 
 ---
 
@@ -187,8 +188,10 @@ Standard Go toolchain:
 2. Make surgical, minimal changes
 3. Add/update tests for modified code
 4. Run quality checks (test, vet, fmt)
-5. Update `PRD.md` checkboxes only when functionality fully ships
-6. Commit with clear, descriptive messages
+5. **Build and install extension:** `go build -o gh-pr-comments ./cmd && gh extension install .`
+6. Test in CLI with real workflows
+7. Update `PRD.md` checkboxes only when functionality fully ships
+8. Commit with clear, descriptive messages
 
 ### Manual Testing
 Each change should include either:
