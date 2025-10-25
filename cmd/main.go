@@ -274,7 +274,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		openPRs, listErr := fetcher.ListPullRequestSummaries(ctx, owner, repo)
 		if listErr != nil {
 			if !errors.Is(listErr, ghprcomments.ErrNoPullRequests) {
-				fmt.Fprintf(errOut, "warning: prune skipped; list open pull requests failed: %v\n", listErr)
+				fmt.Fprintf(errOut, "warning: saved output but skipped pruning; unable to list open pull requests: %v\n", listErr)
 				return nil
 			}
 			openPRs = nil
