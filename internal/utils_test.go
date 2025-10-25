@@ -259,7 +259,7 @@ func TestSaveOutputCreatesDirectoryAndFile(t *testing.T) {
 	}
 	payload := []byte(`{"ok":true}`)
 
-	path, err := SaveOutput(repoRoot, pr, payload)
+	path, err := SaveOutput(repoRoot, pr, payload, "")
 	if err != nil {
 		t.Fatalf("SaveOutput returned error: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 	payload1 := []byte("first payload")
 	payload2 := []byte("second payload")
 
-	first, err := SaveOutput(repoRoot, pr, payload1)
+	first, err := SaveOutput(repoRoot, pr, payload1, "")
 	if err != nil {
 		t.Fatalf("first SaveOutput returned error: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 		t.Fatalf("unexpected filename %q", first)
 	}
 
-	second, err := SaveOutput(repoRoot, pr, payload2)
+	second, err := SaveOutput(repoRoot, pr, payload2, "")
 	if err != nil {
 		t.Fatalf("second SaveOutput returned error: %v", err)
 	}
@@ -355,15 +355,61 @@ func TestSaveOutputOverwritesExistingFile(t *testing.T) {
 	}
 }
 
+func TestSaveOutputRespectsCustomDirectory(t *testing.T) {
+	repoRoot := t.TempDir()
+	customDir := "codex-artifacts"
+	pr := &PullRequestSummary{Number: 42, Title: "Custom Save", HeadRef: "feature"}
+	payload := []byte("{}")
+
+	path, err := SaveOutput(repoRoot, pr, payload, customDir)
+	if err != nil {
+		t.Fatalf("SaveOutput returned error: %v", err)
+	}
+
+	expectedDir := filepath.Join(repoRoot, customDir)
+	if dirInfo, err := os.Stat(expectedDir); err != nil || !dirInfo.IsDir() {
+		t.Fatalf("expected custom directory %s to exist", expectedDir)
+	}
+	if !strings.HasPrefix(path, expectedDir+string(os.PathSeparator)) {
+		t.Fatalf("expected path %q to reside within %s", path, expectedDir)
+	}
+}
+
+func TestSaveOutputSupportsAbsoluteDirectory(t *testing.T) {
+	repoRoot := t.TempDir()
+	absoluteDir := filepath.Join(t.TempDir(), "gh-pr-comments-artifacts")
+	pr := &PullRequestSummary{
+		Number:    7,
+		Title:     "Absolute",
+		HeadRef:   "feature",
+		RepoOwner: "octo",
+		RepoName:  "repo",
+	}
+	payload := []byte("{}")
+
+	path, err := SaveOutput(repoRoot, pr, payload, absoluteDir)
+	if err != nil {
+		t.Fatalf("SaveOutput returned error: %v", err)
+	}
+
+	expectedDir := filepath.Join(absoluteDir, "octo-repo")
+	if info, err := os.Stat(expectedDir); err != nil || !info.IsDir() {
+		t.Fatalf("expected directory %s to exist", expectedDir)
+	}
+	if !strings.HasPrefix(path, expectedDir+string(os.PathSeparator)) {
+		t.Fatalf("expected path %q to reside within %s", path, expectedDir)
+	}
+}
+
 func TestSaveOutputRequiresPullRequestNumber(t *testing.T) {
 	repoRoot := t.TempDir()
 	payload := []byte("{}")
 
-	if _, err := SaveOutput(repoRoot, nil, payload); err == nil {
+	if _, err := SaveOutput(repoRoot, nil, payload, ""); err == nil {
 		t.Fatal("expected error when PR is nil")
 	}
 
-	if _, err := SaveOutput(repoRoot, &PullRequestSummary{Number: 0}, payload); err == nil {
+	if _, err := SaveOutput(repoRoot, &PullRequestSummary{Number: 0}, payload, ""); err == nil {
 		t.Fatal("expected error when PR number is zero")
 	}
 }
@@ -393,7 +439,7 @@ func TestPruneStaleSavedCommentsRemovesClosedFiles(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	removed, err := PruneStaleSavedComments(ctx, getter, repoRoot, "octo", "repo", []*PullRequestSummary{{Number: 7, State: "open"}})
+	removed, err := PruneStaleSavedComments(ctx, getter, repoRoot, "octo", "repo", []*PullRequestSummary{{Number: 7, State: "open"}}, "")
 	if err != nil {
 		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
 	}
@@ -406,6 +452,82 @@ func TestPruneStaleSavedCommentsRemovesClosedFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(closedFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected closed PR file to be removed, got err=%v", err)
+	}
+}
+
+func TestPruneStaleSavedCommentsHonoursCustomDirectory(t *testing.T) {
+	repoRoot := t.TempDir()
+	customDir := filepath.Join(repoRoot, "codex-artifacts")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("failed to create custom directory: %v", err)
+	}
+
+	closed := filepath.Join(customDir, "pr-13-closed.md")
+	if err := os.WriteFile(closed, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("write closed file: %v", err)
+	}
+
+	getter := &fakeSummaryGetter{
+		summaries: map[int]*PullRequestSummary{
+			13: {Number: 13, State: "closed"},
+		},
+	}
+
+	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil, "codex-artifacts")
+	if err != nil {
+		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != closed {
+		t.Fatalf("expected custom directory file to be removed, got %v", removed)
+	}
+	if _, err := os.Stat(closed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected file to be removed from custom directory, got %v", err)
+	}
+}
+
+func TestPruneStaleSavedCommentsIsolatesSharedDirectoryByRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	sharedDir := t.TempDir()
+
+	repoADir := filepath.Join(sharedDir, "octo-alpha")
+	repoBDir := filepath.Join(sharedDir, "octo-beta")
+
+	if err := os.MkdirAll(repoADir, 0o755); err != nil {
+		t.Fatalf("failed to create repo A directory: %v", err)
+	}
+	if err := os.MkdirAll(repoBDir, 0o755); err != nil {
+		t.Fatalf("failed to create repo B directory: %v", err)
+	}
+
+	closedInRepoA := filepath.Join(repoADir, "pr-42-alpha.md")
+	stillOpenRepoB := filepath.Join(repoBDir, "pr-42-beta.md")
+
+	if err := os.WriteFile(closedInRepoA, []byte("closed"), 0o644); err != nil {
+		t.Fatalf("write repo A file: %v", err)
+	}
+	if err := os.WriteFile(stillOpenRepoB, []byte("open"), 0o644); err != nil {
+		t.Fatalf("write repo B file: %v", err)
+	}
+
+	getter := &fakeSummaryGetter{
+		summaries: map[int]*PullRequestSummary{
+			42: {Number: 42, State: "closed"},
+		},
+	}
+
+	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "alpha", nil, sharedDir)
+	if err != nil {
+		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != closedInRepoA {
+		t.Fatalf("expected repo A file to be removed, got %v", removed)
+	}
+
+	if _, err := os.Stat(closedInRepoA); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected repo A file to be removed, got %v", err)
+	}
+	if _, err := os.Stat(stillOpenRepoB); err != nil {
+		t.Fatalf("expected repo B file to remain, got %v", err)
 	}
 }
 
@@ -425,7 +547,7 @@ func TestPruneStaleSavedCommentsRemovesDeletedPRs(t *testing.T) {
 		12: &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}, Message: "Not Found"},
 	}}
 
-	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil)
+	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil, "")
 	if err != nil {
 		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
 	}
@@ -453,7 +575,7 @@ func TestPruneStaleSavedCommentsReturnsErrorWhenLookupFails(t *testing.T) {
 	lookupErr := fmt.Errorf("boom")
 	getter := &fakeSummaryGetter{errors: map[int]error{11: lookupErr}}
 
-	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil)
+	removed, err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil, "")
 	if err == nil {
 		t.Fatal("expected error but got nil")
 	}

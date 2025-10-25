@@ -20,15 +20,16 @@
 - `gh pr-comments -p <number>` to target a specific pull request
 - `gh pr-comments --flat` for a single JSON array of comments
 - `gh pr-comments --text` for Markdown output with HTML stripped
-- `gh pr-comments --save` to write a Markdown snapshot with embedded JSON under `.pr-comments/`
+- `gh pr-comments --save` to write a Markdown snapshot with embedded JSON (defaults to `.pr-comments/`; override via `--save-dir` or `GH_PR_COMMENTS_SAVE_DIR`)
+- `gh pr-comments --save --save-dir codex-artifacts` to drop shareable files in a tracked directory
 - `gh pr-comments --no-colour` (or `--no-color`) to disable ANSI styling; also respects the `NO_COLOR` environment variable
 
 **zsh auto-correct:** If your shell prompts to correct `pr-comments` to `.pr-comments`, leave it as-is or add `alias gh='nocorrect gh'` (or disable `CORRECT`) in your shell config to silence the prompt.
 
 ## Development
 - `go test ./...` to run unit tests
-- `make lint` for the vet/staticcheck bundle
-- `go build ./cmd/...` to produce the extension binary
+- `go vet ./... && staticcheck ./...` for linting
+- `go build -o gh-pr-comments ./cmd` to produce the extension binary
 
 ## Contributing
 Respect the coding guardrails in `AGENTS.md` and keep changes small, tested, and well-documented.
