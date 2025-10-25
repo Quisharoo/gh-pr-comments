@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -508,59 +507,15 @@ func SaveOutput(repoRoot string, pr *PullRequestSummary, payload []byte) (string
 	}
 
 	number := 0
-	branch := "unknown"
 	if pr != nil {
 		number = pr.Number
-		branch = sanitizeBranch(pr.HeadRef)
-		if strings.TrimSpace(branch) == "" {
-			branch = "unknown"
-		}
 	}
 
-	timestamp := time.Now().UTC().Format("20060102T150405.000000000Z")
-	base := fmt.Sprintf("PR_%d_%s_%s", number, branch, timestamp)
-	target := filepath.Join(dir, base+".json")
-
-	if infoErr := ensureUniquePath(&target, dir, base); infoErr != nil {
-		return "", infoErr
-	}
+	filename := fmt.Sprintf("PR_%d.json", number)
+	target := filepath.Join(dir, filename)
 
 	if err := os.WriteFile(target, payload, 0o644); err != nil {
 		return "", err
 	}
 	return target, nil
-}
-
-func ensureUniquePath(current *string, dir, base string) error {
-	if current == nil {
-		return errors.New("nil path reference")
-	}
-
-	if _, err := os.Stat(*current); err == nil {
-		for i := 1; i <= 999; i++ {
-			candidate := filepath.Join(dir, fmt.Sprintf("%s_%03d.json", base, i))
-			_, statErr := os.Stat(candidate)
-			if statErr == nil {
-				continue
-			}
-			if !errors.Is(statErr, fs.ErrNotExist) {
-				return statErr
-			}
-			*current = candidate
-			return nil
-		}
-		return fmt.Errorf("unable to allocate unique filename for %s", base)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-
-	return nil
-}
-
-func sanitizeBranch(ref string) string {
-	if ref == "" {
-		return "unknown"
-	}
-	replacer := strings.NewReplacer("/", "_", " ", "_", "\t", "_")
-	return replacer.Replace(ref)
 }
