@@ -1,4 +1,4 @@
-name: prcomments
+name: gh-pr-comments
 version: 0.1.0
 about: "Fetch and normalise GitHub PR comments for human or AI consumption."
 bin: gh-pr-comments
