@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,6 +336,31 @@ func TestPruneStaleSavedCommentsRemovesClosedFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(closedFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected closed PR file to be removed, got err=%v", err)
+	}
+}
+
+func TestPruneStaleSavedCommentsRemovesDeletedPRs(t *testing.T) {
+	repoRoot := t.TempDir()
+	dir := filepath.Join(repoRoot, ".pr-comments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create comments directory: %v", err)
+	}
+
+	deleted := filepath.Join(dir, "PR_12.json")
+	if err := os.WriteFile(deleted, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("write deleted file: %v", err)
+	}
+
+	getter := &fakeSummaryGetter{errors: map[int]error{
+		12: &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}, Message: "Not Found"},
+	}}
+
+	if err := PruneStaleSavedComments(context.Background(), getter, repoRoot, "octo", "repo", nil); err != nil {
+		t.Fatalf("PruneStaleSavedComments returned error: %v", err)
+	}
+
+	if _, err := os.Stat(deleted); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected deleted PR file to be removed, got err=%v", err)
 	}
 }
 
