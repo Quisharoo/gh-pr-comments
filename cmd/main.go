@@ -402,14 +402,15 @@ func pruneSavedComments(ctx context.Context, fetcher *ghprcomments.Fetcher, repo
 		}
 
 		for _, filePath := range pruned {
+			if _, seenFile := removedSet[filePath]; seenFile {
+				continue
+			}
+			removedSet[filePath] = struct{}{}
+
 			display := filePath
 			if rel, relErr := filepath.Rel(repoRoot, filePath); relErr == nil {
 				display = fmt.Sprintf("%s/%s:%s", owner, name, filepath.ToSlash(rel))
 			}
-			if _, seenFile := removedSet[display]; seenFile {
-				continue
-			}
-			removedSet[display] = struct{}{}
 			removed = append(removed, display)
 		}
 	}
