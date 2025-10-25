@@ -640,18 +640,19 @@ type PullRequestSummaryGetter interface {
 }
 
 // PruneStaleSavedComments removes saved comment files for pull requests that are no longer open.
-func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGetter, repoRoot, owner, repo string, open []*PullRequestSummary) error {
+// It returns the absolute paths of any files that were deleted.
+func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGetter, repoRoot, owner, repo string, open []*PullRequestSummary) ([]string, error) {
 	if getter == nil {
-		return errors.New("prune requires a pull request getter")
+		return nil, errors.New("prune requires a pull request getter")
 	}
 
 	dir := filepath.Join(repoRoot, savedOutputDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 
 	openSet := make(map[int]struct{}, len(open))
@@ -663,6 +664,7 @@ func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGette
 	}
 
 	var errs []error
+	var removed []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -683,6 +685,8 @@ func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGette
 				filePath := filepath.Join(dir, name)
 				if remErr := os.Remove(filePath); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
 					errs = append(errs, fmt.Errorf("remove %s: %w", filePath, remErr))
+				} else if remErr == nil {
+					removed = append(removed, filePath)
 				}
 				continue
 			}
@@ -696,11 +700,13 @@ func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGette
 		filePath := filepath.Join(dir, name)
 		if remErr := os.Remove(filePath); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("remove %s: %w", filePath, remErr))
+		} else if remErr == nil {
+			removed = append(removed, filePath)
 		}
 	}
 
 	if len(errs) > 0 {
-		return errors.Join(errs...)
+		return removed, errors.Join(errs...)
 	}
-	return nil
+	return removed, nil
 }
