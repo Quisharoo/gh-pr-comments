@@ -219,15 +219,16 @@ func safeLogin(user *github.User) string {
 }
 
 var (
-	detailsBlockRegex  = regexp.MustCompile(`(?is)<details.*?>.*?</details>`)
-	htmlCommentRegex   = regexp.MustCompile(`(?s)<!--.*?-->`)
-	codeFenceRegex     = regexp.MustCompile("(?s)```.*?```")
-	inlineCodeRegex    = regexp.MustCompile("`([^`]*)`")
-	imageMarkdownRegex = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
-	linkMarkdownRegex  = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	orderedListRegex   = regexp.MustCompile(`^\d+\.\s+`)
-	base64BlobRegex    = regexp.MustCompile(`\b[A-Za-z0-9+/]{40,}={0,2}\b`)
-	urlRegex           = regexp.MustCompile(`https?://[^\s)]+`)
+	detailsBlockRegex       = regexp.MustCompile(`(?is)<details[^>]*>.*?</details>`)
+	detailsWithSummaryRegex = regexp.MustCompile(`(?is)<details[^>]*>\s*(?:<summary>(.*?)</summary>)?(.*?)</details>`)
+	htmlCommentRegex        = regexp.MustCompile(`(?s)<!--.*?-->`)
+	codeFenceRegex          = regexp.MustCompile("(?s)```.*?```")
+	inlineCodeRegex         = regexp.MustCompile("`([^`]*)`")
+	imageMarkdownRegex      = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	linkMarkdownRegex       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	orderedListRegex        = regexp.MustCompile(`^\d+\.\s+`)
+	base64BlobRegex         = regexp.MustCompile(`\b[A-Za-z0-9+/]{40,}={0,2}\b`)
+	urlRegex                = regexp.MustCompile(`https?://[^\s)]+`)
 )
 
 func cleanCommentBody(body string, opts NormalizationOptions) string {
@@ -239,6 +240,7 @@ func cleanCommentBody(body string, opts NormalizationOptions) string {
 	_ = opts // retained for future expansion and to preserve function signature
 
 	normalized := html.UnescapeString(body)
+	normalized = expandDetailsBlocks(normalized)
 	normalized = detailsBlockRegex.ReplaceAllString(normalized, " ")
 	normalized = htmlCommentRegex.ReplaceAllString(normalized, " ")
 	normalized = codeFenceRegex.ReplaceAllString(normalized, " ")
@@ -316,6 +318,32 @@ func cleanCommentBody(body string, opts NormalizationOptions) string {
 
 	normalized = strings.Join(strings.Fields(normalized), " ")
 	return strings.TrimSpace(normalized)
+}
+
+func expandDetailsBlocks(body string) string {
+	current := body
+	for {
+		next := detailsWithSummaryRegex.ReplaceAllStringFunc(current, func(match string) string {
+			parts := detailsWithSummaryRegex.FindStringSubmatch(match)
+			if len(parts) < 3 {
+				return ""
+			}
+			summary := strings.TrimSpace(StripHTML(parts[1]))
+			body := strings.TrimSpace(parts[2])
+			if summary != "" && body != "" {
+				return summary + "\n" + body
+			}
+			if summary != "" {
+				return summary
+			}
+			return body
+		})
+		if next == current {
+			break
+		}
+		current = next
+	}
+	return current
 }
 
 func hostFromURL(raw string) string {
