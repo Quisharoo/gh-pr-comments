@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -568,6 +569,14 @@ func PruneStaleSavedComments(ctx context.Context, getter PullRequestSummaryGette
 
 		summary, fetchErr := getter.GetPullRequestSummary(ctx, owner, repo, num)
 		if fetchErr != nil {
+			var ghErr *github.ErrorResponse
+			if errors.As(fetchErr, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == http.StatusNotFound {
+				filePath := filepath.Join(dir, name)
+				if remErr := os.Remove(filePath); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
+					errs = append(errs, fmt.Errorf("remove %s: %w", filePath, remErr))
+				}
+				continue
+			}
 			errs = append(errs, fmt.Errorf("fetch pull request #%d: %w", num, fetchErr))
 			continue
 		}
