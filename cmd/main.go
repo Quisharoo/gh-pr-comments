@@ -24,6 +24,7 @@ func main() {
 }
 
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
+	args = normalizeArgs(args)
 	fs := flag.NewFlagSet("gh-pr-comments", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 
@@ -289,6 +290,19 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	return nil
+}
+
+func normalizeArgs(args []string) []string {
+	cleaned := args
+	for len(cleaned) > 0 {
+		switch cleaned[0] {
+		case "prcomments", "pr-comments", "gh-prcomments", "gh-pr-comments":
+			cleaned = cleaned[1:]
+			continue
+		}
+		break
+	}
+	return cleaned
 }
 
 func isTerminalWriter(w io.Writer) bool {
