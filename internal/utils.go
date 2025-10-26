@@ -501,16 +501,18 @@ func resolveSaveDir(repoRoot, saveDir string) string {
 	return filepath.Join(repoRoot, cleaned)
 }
 
-func repoNamespace(owner, repo string) string {
+func repoNamespace(owner, repo string) []string {
 	ownerSlug := slugifyRepoSegment(owner)
 	repoSlug := slugifyRepoSegment(repo)
 	switch {
 	case ownerSlug != "" && repoSlug != "":
-		return ownerSlug + "-" + repoSlug
+		return []string{ownerSlug, repoSlug}
 	case ownerSlug != "":
-		return ownerSlug
+		return []string{ownerSlug}
+	case repoSlug != "":
+		return []string{repoSlug}
 	default:
-		return repoSlug
+		return nil
 	}
 }
 
@@ -566,11 +568,14 @@ func shouldNamespaceDir(repoRoot, dir string) bool {
 
 func repoSaveDirectory(repoRoot, baseDir, owner, repo string) string {
 	namespace := repoNamespace(owner, repo)
-	if namespace == "" {
+	if len(namespace) == 0 {
 		return baseDir
 	}
 	if shouldNamespaceDir(repoRoot, baseDir) {
-		return filepath.Join(baseDir, namespace)
+		parts := make([]string, 0, len(namespace)+1)
+		parts = append(parts, baseDir)
+		parts = append(parts, namespace...)
+		return filepath.Join(parts...)
 	}
 	return baseDir
 }
