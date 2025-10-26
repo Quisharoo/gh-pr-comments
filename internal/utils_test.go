@@ -392,13 +392,36 @@ func TestSaveOutputSupportsAbsoluteDirectory(t *testing.T) {
 		t.Fatalf("SaveOutput returned error: %v", err)
 	}
 
-	expectedDir := filepath.Join(absoluteDir, "octo-repo")
+	expectedDir := filepath.Join(absoluteDir, "octo", "repo")
 	if info, err := os.Stat(expectedDir); err != nil || !info.IsDir() {
 		t.Fatalf("expected directory %s to exist", expectedDir)
 	}
 	if !strings.HasPrefix(path, expectedDir+string(os.PathSeparator)) {
 		t.Fatalf("expected path %q to reside within %s", path, expectedDir)
 	}
+}
+
+func TestRepoSaveDirectoryAvoidsNamespaceCollisions(t *testing.T) {
+	repoRoot := t.TempDir()
+	sharedDir := t.TempDir()
+
+	t.Run("hyphenated repositories remain isolated", func(t *testing.T) {
+		pathOne := repoSaveDirectory(repoRoot, sharedDir, "foo", "bar-baz")
+		pathTwo := repoSaveDirectory(repoRoot, sharedDir, "foo-bar", "baz")
+
+		expectedOne := filepath.Join(sharedDir, "foo", "bar-baz")
+		expectedTwo := filepath.Join(sharedDir, "foo-bar", "baz")
+
+		if pathOne != expectedOne {
+			t.Fatalf("unexpected namespace for first repo: got %q want %q", pathOne, expectedOne)
+		}
+		if pathTwo != expectedTwo {
+			t.Fatalf("unexpected namespace for second repo: got %q want %q", pathTwo, expectedTwo)
+		}
+		if pathOne == pathTwo {
+			t.Fatalf("expected unique namespaces, but both were %q", pathOne)
+		}
+	})
 }
 
 func TestSaveOutputRequiresPullRequestNumber(t *testing.T) {
@@ -489,8 +512,8 @@ func TestPruneStaleSavedCommentsIsolatesSharedDirectoryByRepo(t *testing.T) {
 	repoRoot := t.TempDir()
 	sharedDir := t.TempDir()
 
-	repoADir := filepath.Join(sharedDir, "octo-alpha")
-	repoBDir := filepath.Join(sharedDir, "octo-beta")
+	repoADir := repoSaveDirectory(repoRoot, sharedDir, "octo", "alpha")
+	repoBDir := repoSaveDirectory(repoRoot, sharedDir, "octo", "beta")
 
 	if err := os.MkdirAll(repoADir, 0o755); err != nil {
 		t.Fatalf("failed to create repo A directory: %v", err)
