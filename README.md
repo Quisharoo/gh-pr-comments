@@ -12,7 +12,14 @@
 - Go 1.22+
 - GitHub CLI (`gh`) configured with an access token
 - `fzf` for interactive selection (falls back to a basic prompt if absent)
-- Optional: `jq` for piping JSON, `make` for project tasks
+- Optional: `jq` for piping JSON
+
+## Installation
+From the repository root:
+1. `go build -o gh-pr-comments ./cmd`
+2. `gh extension install .`
+
+`gh extension install .` copies the freshly built binary into the extension’s install directory. After installation you can optionally remove the workspace copy with `rm gh-pr-comments`.
 
 ## Usage
 - `gh pr-comments` to pick a PR interactively and print JSON
