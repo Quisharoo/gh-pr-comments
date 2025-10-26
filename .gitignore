@@ -23,6 +23,8 @@ coverage.out
 vendor/
 gh-pr-comments
 .pr-comments/
+/.cache/
+
 
 # Cursor
 # Exclude user storage except the User/ settings we track
