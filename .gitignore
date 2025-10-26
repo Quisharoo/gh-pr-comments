@@ -22,6 +22,7 @@ dist/
 coverage.out
 vendor/
 gh-pr-comments
+.pr-comments/
 
 # Cursor
 # Exclude user storage except the User/ settings we track
@@ -55,5 +56,6 @@ home/.codex/sessions/
 # Repo-wide dumps and exports
 repomix-output.xml
 *.itermexport
-.pr-comments/
 *.log
+
+AGENTS.md
