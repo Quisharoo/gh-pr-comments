@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // FlowState represents the current state of the interactive flow.
@@ -19,24 +18,23 @@ const (
 
 // UnifiedFlowModel manages the entire interactive flow without screen flashing.
 type UnifiedFlowModel struct {
-	state         FlowState
-	prSelector    PRSelectorModel
-	jsonExplorer  JSONExplorerModel
-	selectedPR    *PullRequestSummary
-	jsonData      []byte
-	err           error
-	skipPRSelect  bool
-	fetchComments func(*PullRequestSummary) ([]byte, error)
-	width         int
-	height        int
+	state        FlowState
+	prSelector   PRSelectorModel
+	jsonExplorer JSONExplorerModel
+	selectedPR   *PullRequestSummary
+	jsonData     []byte
+	err          error
+	skipPRSelect bool
+	width        int
+	height       int
 }
 
 // NewUnifiedFlowModel creates a new unified flow starting with PR selection.
-func NewUnifiedFlowModel(prs []*PullRequestSummary, fetchComments func(*PullRequestSummary) ([]byte, error)) UnifiedFlowModel {
+// PRs should have CommentsJSON prefetched.
+func NewUnifiedFlowModel(prs []*PullRequestSummary) UnifiedFlowModel {
 	return UnifiedFlowModel{
-		state:         StateSelectingPR,
-		prSelector:    NewPRSelectorModel(prs),
-		fetchComments: fetchComments,
+		state:      StateSelectingPR,
+		prSelector: NewPRSelectorModel(prs),
 	}
 }
 
@@ -60,35 +58,11 @@ func (m UnifiedFlowModel) Init() tea.Cmd {
 	switch m.state {
 	case StateSelectingPR:
 		return m.prSelector.Init()
-	case StateLoading:
-		// Start fetching comments
-		return m.fetchCommentsCmd()
 	case StateExploringJSON:
 		return m.jsonExplorer.Init()
 	default:
 		return nil
 	}
-}
-
-// fetchCommentsCmd creates a command that fetches comments asynchronously.
-func (m UnifiedFlowModel) fetchCommentsCmd() tea.Cmd {
-	return func() tea.Msg {
-		if m.fetchComments == nil || m.selectedPR == nil {
-			return commentsFetchedMsg{err: fmt.Errorf("no fetch function or PR")}
-		}
-
-		jsonData, err := m.fetchComments(m.selectedPR)
-		return commentsFetchedMsg{
-			data: jsonData,
-			err:  err,
-		}
-	}
-}
-
-// commentsFetchedMsg is sent when comments have been fetched.
-type commentsFetchedMsg struct {
-	data []byte
-	err  error
 }
 
 // Update implements tea.Model.
@@ -116,10 +90,30 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check if PR was selected
 		if m.prSelector.quitting {
 			if m.prSelector.choice != nil {
-				// PR selected - transition to loading state
+				// PR selected - use prefetched comments
 				m.selectedPR = m.prSelector.choice
-				m.state = StateLoading
-				return m, m.fetchCommentsCmd()
+
+				// Check if comments were prefetched
+				if len(m.selectedPR.CommentsJSON) == 0 {
+					m.err = fmt.Errorf("no comments data prefetched for PR #%d", m.selectedPR.Number)
+					m.state = StateQuitting
+					return m, tea.Quit
+				}
+
+				// Transition directly to JSON explorer
+				explorer, err := NewJSONExplorerModel(m.selectedPR.CommentsJSON)
+				if err != nil {
+					m.err = err
+					m.state = StateQuitting
+					return m, tea.Quit
+				}
+
+				m.jsonExplorer = explorer
+				m.jsonData = m.selectedPR.CommentsJSON
+				m.state = StateExploringJSON
+
+				cmd := m.syncJSONExplorerSize()
+				return m, cmd
 			}
 			// Cancelled - quit
 			m.state = StateQuitting
@@ -127,39 +121,6 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, cmd
-
-	case StateLoading:
-		// Handle the fetched comments
-		if msg, ok := msg.(commentsFetchedMsg); ok {
-			if msg.err != nil {
-				m.err = msg.err
-				m.state = StateQuitting
-				return m, tea.Quit
-			}
-
-			// Successfully fetched - transition to JSON explorer
-			explorer, err := NewJSONExplorerModel(msg.data)
-			if err != nil {
-				m.err = err
-				m.state = StateQuitting
-				return m, tea.Quit
-			}
-
-			m.jsonExplorer = explorer
-			m.jsonData = msg.data
-			m.state = StateExploringJSON
-			return m, nil
-		}
-
-		// Allow quitting during loading
-		if msg, ok := msg.(tea.KeyMsg); ok {
-			if msg.String() == "ctrl+c" || msg.String() == "q" {
-				m.state = StateQuitting
-				return m, tea.Quit
-			}
-		}
-
-		return m, nil
 
 	case StateExploringJSON:
 		// Update JSON explorer
@@ -187,8 +148,6 @@ func (m UnifiedFlowModel) View() string {
 	switch m.state {
 	case StateSelectingPR:
 		return m.prSelector.View()
-	case StateLoading:
-		return m.renderLoadingScreen()
 	case StateExploringJSON:
 		return m.jsonExplorer.View()
 	case StateQuitting:
@@ -196,25 +155,6 @@ func (m UnifiedFlowModel) View() string {
 	default:
 		return ""
 	}
-}
-
-// renderLoadingScreen shows a loading message while fetching comments.
-func (m UnifiedFlowModel) renderLoadingScreen() string {
-	if m.selectedPR == nil {
-		return "Loading..."
-	}
-
-	style := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("170")).
-		Padding(1, 2)
-
-	message := fmt.Sprintf("Fetching comments for %s/%s#%d...",
-		m.selectedPR.RepoOwner,
-		m.selectedPR.RepoName,
-		m.selectedPR.Number)
-
-	return style.Render(message)
 }
 
 // SetJSONData transitions to the JSON explorer state with the given data.
@@ -229,6 +169,7 @@ func (m *UnifiedFlowModel) SetJSONData(jsonData []byte) error {
 	m.jsonData = jsonData
 	m.jsonExplorer = explorer
 	m.state = StateExploringJSON
+	m.syncJSONExplorerSize()
 	return nil
 }
 
@@ -244,8 +185,8 @@ type prSelectedMsg struct {
 
 // RunUnifiedFlow executes the complete interactive flow in a single TUI session.
 // If jsonData is provided, it skips PR selection and goes straight to JSON explorer.
-// The fetchComments callback is used to fetch comment JSON after PR selection.
-func RunUnifiedFlow(prs []*PullRequestSummary, jsonData []byte, fetchComments func(*PullRequestSummary) ([]byte, error)) (*PullRequestSummary, error) {
+// PRs should have CommentsJSON prefetched when prs is provided.
+func RunUnifiedFlow(prs []*PullRequestSummary, jsonData []byte) (*PullRequestSummary, error) {
 	var model tea.Model
 	var err error
 
@@ -256,8 +197,8 @@ func RunUnifiedFlow(prs []*PullRequestSummary, jsonData []byte, fetchComments fu
 			return nil, err
 		}
 	} else {
-		// Start with PR selection
-		model = NewUnifiedFlowModel(prs, fetchComments)
+		// Start with PR selection (comments should be prefetched)
+		model = NewUnifiedFlowModel(prs)
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
@@ -274,4 +215,23 @@ func RunUnifiedFlow(prs []*PullRequestSummary, jsonData []byte, fetchComments fu
 	}
 
 	return nil, nil
+}
+
+// syncJSONExplorerSize replays the last known window size to the explorer so it
+// can fill the available space immediately after the state transition.
+func (m *UnifiedFlowModel) syncJSONExplorerSize() tea.Cmd {
+	if m.width == 0 || m.height == 0 {
+		return nil
+	}
+
+	updated, cmd := m.jsonExplorer.Update(tea.WindowSizeMsg{
+		Width:  m.width,
+		Height: m.height,
+	})
+
+	if explorer, ok := updated.(JSONExplorerModel); ok {
+		m.jsonExplorer = explorer
+	}
+
+	return cmd
 }
