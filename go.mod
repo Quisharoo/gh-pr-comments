@@ -1,6 +1,6 @@
 module github.com/Quish-Labs/gh-pr-comments
 
-go 1.24.0
+go 1.22
 
 require (
 	github.com/charmbracelet/bubbles v0.21.0
