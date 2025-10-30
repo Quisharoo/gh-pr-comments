@@ -44,24 +44,24 @@ type JSONNode struct {
 
 // KeyMap defines keybindings for the JSON explorer.
 type KeyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	PageUp      key.Binding
-	PageDown    key.Binding
-	HalfPageUp  key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	PageUp       key.Binding
+	PageDown     key.Binding
+	HalfPageUp   key.Binding
 	HalfPageDown key.Binding
-	GotoTop     key.Binding
-	GotoBottom  key.Binding
-	Expand      key.Binding
-	Collapse    key.Binding
-	ExpandAll   key.Binding
-	CollapseAll key.Binding
-	Search      key.Binding
-	NextMatch   key.Binding
-	PrevMatch   key.Binding
-	ClearSearch key.Binding
-	Quit        key.Binding
-	Help        key.Binding
+	GotoTop      key.Binding
+	GotoBottom   key.Binding
+	Expand       key.Binding
+	Collapse     key.Binding
+	ExpandAll    key.Binding
+	CollapseAll  key.Binding
+	Search       key.Binding
+	NextMatch    key.Binding
+	PrevMatch    key.Binding
+	ClearSearch  key.Binding
+	Quit         key.Binding
+	Help         key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings (vim-style).
@@ -159,7 +159,8 @@ func NewJSONExplorerModel(jsonData []byte) (JSONExplorerModel, error) {
 	ti.Placeholder = "Search..."
 	ti.CharLimit = 100
 
-	vp := viewport.New(80, 24)
+	// Start with reasonable defaults; will be updated by WindowSizeMsg
+	vp := viewport.New(100, 30)
 
 	model := JSONExplorerModel{
 		viewport:    vp,
@@ -169,6 +170,8 @@ func NewJSONExplorerModel(jsonData []byte) (JSONExplorerModel, error) {
 		flatNodes:   flatNodes,
 		cursor:      0,
 	}
+
+	model.viewport.SetContent(model.renderTree())
 
 	return model, nil
 }
@@ -234,6 +237,8 @@ func flattenTree(root *JSONNode) []*JSONNode {
 
 // Init implements tea.Model.
 func (m JSONExplorerModel) Init() tea.Cmd {
+	// Set initial content so it displays immediately
+	m.viewport.SetContent(m.renderTree())
 	return nil
 }
 
@@ -246,7 +251,9 @@ func (m JSONExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		headerHeight := 2
+		// Header: title line + 2 newlines = 3 lines
+		headerHeight := 3
+		// Footer: status line + newline = 2 lines (or 3 in search mode)
 		footerHeight := 2
 		if m.searchMode {
 			footerHeight = 3
@@ -417,7 +424,6 @@ func (m JSONExplorerModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(m.searchInput.View())
 	} else {
-		helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
 
 		status := fmt.Sprintf("%d/%d", m.cursor+1, len(m.flatNodes))
@@ -431,11 +437,7 @@ func (m JSONExplorerModel) View() string {
 			status += fmt.Sprintf(" | %d matches for '%s'", matches, m.searchQuery)
 		}
 
-		help := "j/k:move • l/h:expand/collapse • /:search • n/N:next/prev • q:quit • ?:help"
-
 		b.WriteString(statusStyle.Render(status))
-		b.WriteString(" ")
-		b.WriteString(helpStyle.Render(help))
 	}
 
 	return b.String()
