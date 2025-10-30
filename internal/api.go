@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-github/v61/github"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/errgroup"
 )
 
 // ErrNoPullRequests signals that no PRs were returned for a repository.
@@ -62,18 +63,42 @@ type commentPayload struct {
 
 // FetchComments retrieves every comment category for the pull request.
 func (f *Fetcher) FetchComments(ctx context.Context, owner, repo string, number int) (commentPayload, error) {
-	issues, err := f.listIssueComments(ctx, owner, repo, number)
-	if err != nil {
-		return commentPayload{}, err
-	}
+	var (
+		issues         []*github.IssueComment
+		reviewComments []*github.PullRequestComment
+		reviews        []*github.PullRequestReview
+	)
 
-	reviewComments, err := f.listReviewComments(ctx, owner, repo, number)
-	if err != nil {
-		return commentPayload{}, err
-	}
+	g, ctx := errgroup.WithContext(ctx)
 
-	reviews, err := f.listReviews(ctx, owner, repo, number)
-	if err != nil {
+	g.Go(func() error {
+		data, err := f.listIssueComments(ctx, owner, repo, number)
+		if err != nil {
+			return err
+		}
+		issues = data
+		return nil
+	})
+
+	g.Go(func() error {
+		data, err := f.listReviewComments(ctx, owner, repo, number)
+		if err != nil {
+			return err
+		}
+		reviewComments = data
+		return nil
+	})
+
+	g.Go(func() error {
+		data, err := f.listReviews(ctx, owner, repo, number)
+		if err != nil {
+			return err
+		}
+		reviews = data
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
 		return commentPayload{}, err
 	}
 
