@@ -13,18 +13,19 @@ import (
 // PullRequestSummary carries PR metadata needed for display.
 // This is aliased from the main package to avoid circular dependencies.
 type PullRequestSummary struct {
-	Number    int
-	Title     string
-	Author    string
-	State     string
-	Created   time.Time
-	Updated   time.Time
-	HeadRef   string
-	BaseRef   string
-	RepoName  string
-	RepoOwner string
-	URL       string
-	LocalPath string
+	Number       int
+	Title        string
+	Author       string
+	State        string
+	Created      time.Time
+	Updated      time.Time
+	HeadRef      string
+	BaseRef      string
+	RepoName     string
+	RepoOwner    string
+	URL          string
+	LocalPath    string
+	CommentsJSON []byte // Prefetched JSON comments data
 }
 
 // PRSelectorModel is the Bubbletea model for interactive PR selection.
