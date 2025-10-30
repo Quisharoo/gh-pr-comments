@@ -15,6 +15,7 @@ import (
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
 	"github.com/Quish-Labs/gh-pr-comments/internal/tui"
 	"github.com/google/go-github/v61/github"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -275,53 +276,89 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		// Use interactive TUI by default, fall back to classic prompt only if disabled
 		if useInteractive {
 			// Prefetch comments for all PRs
-
-			tuiPRs := make([]*tui.PullRequestSummary, len(all))
-			for i, pr := range all {
-				owner := strings.TrimSpace(pr.RepoOwner)
-				repo := strings.TrimSpace(pr.RepoName)
-
-				// Fetch comments for this PR
-				payloads, err := fetcher.FetchComments(ctx, owner, repo, pr.Number)
-				if err != nil {
-					fmt.Fprintf(errOut, "warning: failed to fetch comments for %s/%s#%d: %v\n", owner, repo, pr.Number, err)
-					// Skip this PR if we can't fetch comments
-					continue
-				}
-
-				normOpts := ghprcomments.NormalizationOptions{
-					StripHTML: stripHTML,
-				}
-
-				output := ghprcomments.BuildOutput(pr, payloads, normOpts)
-				jsonData, err := ghprcomments.MarshalJSON(output, flat)
-				if err != nil {
-					fmt.Fprintf(errOut, "warning: failed to marshal JSON for %s/%s#%d: %v\n", owner, repo, pr.Number, err)
-					continue
-				}
-
-				tuiPRs[i] = &tui.PullRequestSummary{
-					Number:       pr.Number,
-					Title:        pr.Title,
-					Author:       pr.Author,
-					State:        pr.State,
-					Created:      pr.Created,
-					Updated:      pr.Updated,
-					HeadRef:      pr.HeadRef,
-					BaseRef:      pr.BaseRef,
-					RepoName:     pr.RepoName,
-					RepoOwner:    pr.RepoOwner,
-					URL:          pr.URL,
-					LocalPath:    pr.LocalPath,
-					CommentsJSON: jsonData,
-				}
+			type prefetchResult struct {
+				pr    *tui.PullRequestSummary
+				warn  error
+				index int
 			}
 
-			// Filter out nil entries (failed fetches)
-			validPRs := make([]*tui.PullRequestSummary, 0, len(tuiPRs))
-			for _, pr := range tuiPRs {
-				if pr != nil {
-					validPRs = append(validPRs, pr)
+			results := make([]prefetchResult, len(all))
+			for i := range results {
+				results[i].index = i
+			}
+
+			workerLimit := 4
+			if len(all) < workerLimit {
+				workerLimit = len(all)
+			}
+			if workerLimit == 0 {
+				workerLimit = 1
+			}
+
+			sem := make(chan struct{}, workerLimit)
+			prefetchGroup, groupCtx := errgroup.WithContext(ctx)
+
+			for i, pr := range all {
+				i, pr := i, pr
+				prefetchGroup.Go(func() error {
+					select {
+					case sem <- struct{}{}:
+					case <-groupCtx.Done():
+						return groupCtx.Err()
+					}
+					defer func() { <-sem }()
+
+					owner := strings.TrimSpace(pr.RepoOwner)
+					repo := strings.TrimSpace(pr.RepoName)
+
+					payloads, err := fetcher.FetchComments(groupCtx, owner, repo, pr.Number)
+					if err != nil {
+						results[i].warn = fmt.Errorf("failed to fetch comments for %s/%s#%d: %w", owner, repo, pr.Number, err)
+						return nil
+					}
+
+					normOpts := ghprcomments.NormalizationOptions{
+						StripHTML: stripHTML,
+					}
+
+					output := ghprcomments.BuildOutput(pr, payloads, normOpts)
+					jsonData, err := ghprcomments.MarshalJSON(output, flat)
+					if err != nil {
+						results[i].warn = fmt.Errorf("failed to marshal JSON for %s/%s#%d: %w", owner, repo, pr.Number, err)
+						return nil
+					}
+
+					results[i].pr = &tui.PullRequestSummary{
+						Number:       pr.Number,
+						Title:        pr.Title,
+						Author:       pr.Author,
+						State:        pr.State,
+						Created:      pr.Created,
+						Updated:      pr.Updated,
+						HeadRef:      pr.HeadRef,
+						BaseRef:      pr.BaseRef,
+						RepoName:     pr.RepoName,
+						RepoOwner:    pr.RepoOwner,
+						URL:          pr.URL,
+						LocalPath:    pr.LocalPath,
+						CommentsJSON: jsonData,
+					}
+					return nil
+				})
+			}
+
+			if err := prefetchGroup.Wait(); err != nil {
+				return err
+			}
+
+			validPRs := make([]*tui.PullRequestSummary, 0, len(results))
+			for _, res := range results {
+				if res.warn != nil {
+					fmt.Fprintf(errOut, "warning: %v\n", res.warn)
+					continue
+				}
+				if res.pr != nil {
+					validPRs = append(validPRs, res.pr)
 				}
 			}
 
