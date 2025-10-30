@@ -43,8 +43,10 @@ gh pr-comments --pr 123
 
 **Interactive JSON Explorer (fx-style):**
 - `j`/`k` or `↑`/`↓` - Navigate nodes
-- `Enter`, `l`, or `→` - Toggle expand/collapse
+- `Enter`, `l`, or `→` - Open URL (if value is URL) or toggle expand/collapse
 - `h` or `←` - Collapse (or collapse parent if already collapsed)
+- `y` or `c` - Copy highlighted value to clipboard
+- `o` - Open URL in browser (for URL values)
 - `E` / `C` - Expand all / Collapse all
 - `g` / `G` - Go to top/bottom
 - `/` - Search for keys or values
