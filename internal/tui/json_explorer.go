@@ -3,8 +3,12 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -60,6 +64,8 @@ type KeyMap struct {
 	NextMatch    key.Binding
 	PrevMatch    key.Binding
 	ClearSearch  key.Binding
+	Copy         key.Binding
+	OpenURL      key.Binding
 	Quit         key.Binding
 	Help         key.Binding
 }
@@ -130,6 +136,14 @@ func DefaultKeyMap() KeyMap {
 		ClearSearch: key.NewBinding(
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "clear search"),
+		),
+		Copy: key.NewBinding(
+			key.WithKeys("y", "c"),
+			key.WithHelp("y/c", "copy value"),
+		),
+		OpenURL: key.NewBinding(
+			key.WithKeys("o"),
+			key.WithHelp("o", "open URL"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
@@ -332,8 +346,14 @@ func (m JSONExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keyMap.Expand):
 			if m.cursor < len(m.flatNodes) {
 				node := m.flatNodes[m.cursor]
-				if len(node.Children) > 0 {
-					// Toggle expand/collapse
+
+				// First check if this node contains a URL
+				urlToOpen := m.extractURL(node)
+				if urlToOpen != "" {
+					// Open URL instead of expanding
+					go openBrowser(urlToOpen)
+				} else if len(node.Children) > 0 {
+					// Toggle expand/collapse for objects/arrays
 					node.Expanded = !node.Expanded
 					m.flatNodes = flattenTree(m.tree)
 					m.viewport.SetContent(m.renderTree())
@@ -379,6 +399,24 @@ func (m JSONExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keyMap.PrevMatch):
 			m.findPrevMatch()
 			m.ensureCursorVisible()
+
+		case key.Matches(msg, keyMap.Copy):
+			if m.cursor < len(m.flatNodes) {
+				node := m.flatNodes[m.cursor]
+				valueToCopy := m.getNodeValueString(node)
+				if err := clipboard.WriteAll(valueToCopy); err == nil {
+					// Success - could show a brief message
+				}
+			}
+
+		case key.Matches(msg, keyMap.OpenURL):
+			if m.cursor < len(m.flatNodes) {
+				node := m.flatNodes[m.cursor]
+				urlToOpen := m.extractURL(node)
+				if urlToOpen != "" {
+					go openBrowser(urlToOpen)
+				}
+			}
 
 		case key.Matches(msg, keyMap.ClearSearch):
 			m.searchQuery = ""
@@ -673,4 +711,79 @@ func ExploreJSON(jsonData []byte) error {
 	}
 
 	return nil
+}
+
+// getNodeValueString returns a string representation of the node's value for copying.
+func (m JSONExplorerModel) getNodeValueString(node *JSONNode) string {
+	if node == nil {
+		return ""
+	}
+
+	// For objects and arrays, return JSON representation
+	if node.Type == "object" || node.Type == "array" {
+		jsonBytes, err := json.MarshalIndent(node.Value, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("%v", node.Value)
+		}
+		return string(jsonBytes)
+	}
+
+	// For strings, return unquoted value
+	if node.Type == "string" {
+		return fmt.Sprintf("%v", node.Value)
+	}
+
+	// For other types, return string representation
+	return fmt.Sprintf("%v", node.Value)
+}
+
+// extractURL attempts to extract a URL from a node's value.
+func (m JSONExplorerModel) extractURL(node *JSONNode) string {
+	if node == nil {
+		return ""
+	}
+
+	// Check if the value is a string that looks like a URL
+	valueStr := fmt.Sprintf("%v", node.Value)
+
+	// URL regex pattern
+	urlPattern := regexp.MustCompile(`https?://[^\s]+`)
+
+	// If it's a string type and matches URL pattern
+	if node.Type == "string" {
+		if urlPattern.MatchString(valueStr) {
+			return urlPattern.FindString(valueStr)
+		}
+	}
+
+	// Check if key suggests it's a URL (permalink, url, link, etc.)
+	keyLower := strings.ToLower(node.Key)
+	if strings.Contains(keyLower, "url") ||
+	   strings.Contains(keyLower, "link") ||
+	   strings.Contains(keyLower, "permalink") ||
+	   strings.Contains(keyLower, "href") {
+		if urlPattern.MatchString(valueStr) {
+			return urlPattern.FindString(valueStr)
+		}
+	}
+
+	return ""
+}
+
+// openBrowser opens the given URL in the default browser.
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return fmt.Errorf("unsupported platform")
+	}
+
+	return cmd.Start()
 }
