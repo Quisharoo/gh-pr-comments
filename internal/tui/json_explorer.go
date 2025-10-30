@@ -497,7 +497,7 @@ func (m JSONExplorerModel) renderTree() string {
 
 		// Cursor indicator
 		if i == m.cursor {
-			b.WriteString("▶ ")
+			b.WriteString("● ")
 		} else {
 			b.WriteString("  ")
 		}
@@ -523,22 +523,42 @@ func (m JSONExplorerModel) renderTree() string {
 			keyStyle = keyStyle.Background(lipgloss.Color("237"))
 		}
 
+		// Calculate available width for value
+		// Account for: indent + cursor (2) + expand (2) + key + ": " (2)
+		prefixWidth := len(indent) + 2 + 2
+		if node.Key != "" {
+			prefixWidth += len(node.Key) + 2
+		}
+
 		// Render key
 		if node.Key != "" {
 			b.WriteString(keyStyle.Render(node.Key))
 			b.WriteString(": ")
 		}
 
-		// Render value preview
-		b.WriteString(m.renderValue(node, i == m.cursor))
-		b.WriteString("\n")
+		// Render value preview with wrapping
+		valueLines := m.renderValue(node, i == m.cursor, prefixWidth)
+		if len(valueLines) > 0 {
+			b.WriteString(valueLines[0])
+			b.WriteString("\n")
+
+			// Render continuation lines with proper indentation
+			for j := 1; j < len(valueLines); j++ {
+				b.WriteString(strings.Repeat(" ", prefixWidth))
+				b.WriteString(valueLines[j])
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString("\n")
+		}
 	}
 
 	return b.String()
 }
 
-// renderValue renders a node's value with appropriate styling.
-func (m JSONExplorerModel) renderValue(node *JSONNode, selected bool) string {
+// renderValue renders a node's value with appropriate styling and wrapping.
+// Returns an array of lines (first line, then continuation lines).
+func (m JSONExplorerModel) renderValue(node *JSONNode, selected bool, prefixWidth int) []string {
 	valueStyle := lipgloss.NewStyle()
 
 	if selected {
@@ -550,40 +570,58 @@ func (m JSONExplorerModel) renderValue(node *JSONNode, selected bool) string {
 		count := len(node.Children)
 		style := valueStyle.Foreground(lipgloss.Color("241"))
 		if node.Expanded {
-			return style.Render(fmt.Sprintf("{} %d keys", count))
+			return []string{style.Render(fmt.Sprintf("{} %d keys", count))}
 		}
-		return style.Render(fmt.Sprintf("{...} %d keys", count))
+		return []string{style.Render(fmt.Sprintf("{...} %d keys", count))}
 
 	case "array":
 		count := len(node.Children)
 		style := valueStyle.Foreground(lipgloss.Color("241"))
 		if node.Expanded {
-			return style.Render(fmt.Sprintf("[] %d items", count))
+			return []string{style.Render(fmt.Sprintf("[] %d items", count))}
 		}
-		return style.Render(fmt.Sprintf("[...] %d items", count))
+		return []string{style.Render(fmt.Sprintf("[...] %d items", count))}
 
 	case "string":
 		style := valueStyle.Foreground(lipgloss.Color("142"))
 		str := fmt.Sprintf("%v", node.Value)
-		if len(str) > 60 {
-			str = str[:57] + "..."
+
+		// Calculate available width for the string (leave some margin)
+		availableWidth := m.width - prefixWidth - 4 // 4 for quotes and margin
+		if availableWidth < 20 {
+			availableWidth = 20 // Minimum width
 		}
-		return style.Render(fmt.Sprintf("%q", str))
+
+		// Wrap the string if needed
+		wrappedLines := wrapString(str, availableWidth)
+
+		// Apply styling to each line
+		styledLines := make([]string, len(wrappedLines))
+		for i, line := range wrappedLines {
+			if i == 0 {
+				styledLines[i] = style.Render(fmt.Sprintf("%q", line))
+			} else {
+				// Continuation lines - no opening quote
+				styledLines[i] = style.Render(fmt.Sprintf("%s", line))
+			}
+		}
+
+		return styledLines
 
 	case "number":
 		style := valueStyle.Foreground(lipgloss.Color("170"))
-		return style.Render(fmt.Sprintf("%v", node.Value))
+		return []string{style.Render(fmt.Sprintf("%v", node.Value))}
 
 	case "bool":
 		style := valueStyle.Foreground(lipgloss.Color("208"))
-		return style.Render(fmt.Sprintf("%v", node.Value))
+		return []string{style.Render(fmt.Sprintf("%v", node.Value))}
 
 	case "null":
 		style := valueStyle.Foreground(lipgloss.Color("241"))
-		return style.Render("null")
+		return []string{style.Render("null")}
 
 	default:
-		return valueStyle.Render(fmt.Sprintf("%v", node.Value))
+		return []string{valueStyle.Render(fmt.Sprintf("%v", node.Value))}
 	}
 }
 
@@ -786,4 +824,48 @@ func openBrowser(url string) error {
 	}
 
 	return cmd.Start()
+}
+
+// wrapString wraps a string to fit within the specified width.
+// It tries to break at word boundaries when possible.
+func wrapString(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+
+	// If string fits, return as-is
+	if len(s) <= width {
+		return []string{s}
+	}
+
+	var lines []string
+	remaining := s
+
+	for len(remaining) > 0 {
+		if len(remaining) <= width {
+			lines = append(lines, remaining)
+			break
+		}
+
+		// Try to break at a word boundary
+		breakPoint := width
+		for i := width; i > width/2 && i < len(remaining); i-- {
+			if remaining[i] == ' ' || remaining[i] == '\t' || remaining[i] == '\n' {
+				breakPoint = i
+				break
+			}
+		}
+
+		// If we found a good break point, use it
+		if breakPoint < len(remaining) && (remaining[breakPoint] == ' ' || remaining[breakPoint] == '\t' || remaining[breakPoint] == '\n') {
+			lines = append(lines, remaining[:breakPoint])
+			remaining = strings.TrimLeft(remaining[breakPoint+1:], " \t\n")
+		} else {
+			// Hard break at width
+			lines = append(lines, remaining[:width])
+			remaining = remaining[width:]
+		}
+	}
+
+	return lines
 }
