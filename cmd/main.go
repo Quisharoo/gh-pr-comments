@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
+	"github.com/Quish-Labs/gh-pr-comments/internal/tui"
 	"github.com/google/go-github/v61/github"
 	"golang.org/x/term"
 )
@@ -37,6 +38,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	var noColour bool
 	var noColor bool
 	var saveDir string
+	var noInteractive bool
 
 	fs.IntVar(&prNumber, "p", 0, "pull request number")
 	fs.IntVar(&prNumber, "pr", 0, "pull request number")
@@ -47,6 +49,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	fs.BoolVar(&noColour, "no-colour", false, "disable coloured terminal output")
 	fs.BoolVar(&noColor, "no-color", false, "disable colored terminal output")
 	fs.StringVar(&saveDir, "save-dir", "", "override directory used by --save")
+	fs.BoolVar(&noInteractive, "no-interactive", false, "disable interactive TUI (for piping/scripting)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -59,6 +62,14 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	if text {
 		stripHTML = true
 	}
+
+	// Determine if we should use interactive mode
+	// Interactive is default unless:
+	// - --no-interactive is set
+	// - --save is set (saving is non-interactive)
+	// - --text is set (markdown output is non-interactive)
+	// - stdout is not a TTY (piping)
+	useInteractive := !noInteractive && !save && !text && isTerminalWriter(out)
 
 	if noColor {
 		noColour = true
@@ -176,6 +187,39 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 				selectedRepo = ghprcomments.Repository{Owner: prSummary.RepoOwner, Name: prSummary.RepoName, Path: prSummary.LocalPath}
 			}
 		}
+
+		// If interactive mode and PR was specified, fetch comments and launch JSON explorer directly
+		if useInteractive {
+			owner := strings.TrimSpace(prSummary.RepoOwner)
+			repo := strings.TrimSpace(prSummary.RepoName)
+			if owner == "" || repo == "" {
+				owner = strings.TrimSpace(selectedRepo.Owner)
+				repo = strings.TrimSpace(selectedRepo.Name)
+			}
+
+			payloads, err := fetcher.FetchComments(ctx, owner, repo, prNumber)
+			if err != nil {
+				return fmt.Errorf("fetch comments: %w", err)
+			}
+
+			normOpts := ghprcomments.NormalizationOptions{
+				StripHTML: stripHTML,
+			}
+
+			output := ghprcomments.BuildOutput(prSummary, payloads, normOpts)
+			jsonData, err := ghprcomments.MarshalJSON(output, flat)
+			if err != nil {
+				return fmt.Errorf("marshal JSON: %w", err)
+			}
+
+			// Launch JSON explorer directly
+			_, err = tui.RunUnifiedFlow(nil, jsonData, nil)
+			if err != nil {
+				return fmt.Errorf("explore JSON: %w", err)
+			}
+
+			return nil
+		}
 	} else {
 		all := make([]*ghprcomments.PullRequestSummary, 0)
 		var errs []string
@@ -228,9 +272,94 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 		}
 
-		prSummary, err = ghprcomments.SelectPullRequestWithOptions(ctx, all, in, out, ghprcomments.SelectPromptOptions{Colorize: colorEnabled})
-		if err != nil {
-			return fmt.Errorf("select pull request: %w", err)
+		// Convert to TUI-compatible format
+		tuiPRs := make([]*tui.PullRequestSummary, len(all))
+		for i, pr := range all {
+			tuiPRs[i] = &tui.PullRequestSummary{
+				Number:    pr.Number,
+				Title:     pr.Title,
+				Author:    pr.Author,
+				State:     pr.State,
+				Created:   pr.Created,
+				Updated:   pr.Updated,
+				HeadRef:   pr.HeadRef,
+				BaseRef:   pr.BaseRef,
+				RepoName:  pr.RepoName,
+				RepoOwner: pr.RepoOwner,
+				URL:       pr.URL,
+				LocalPath: pr.LocalPath,
+			}
+		}
+
+		// Use interactive TUI by default, fall back to classic prompt only if disabled
+		if useInteractive {
+			// Create a fetch function for the unified flow
+			fetchCommentsFunc := func(selectedPR *tui.PullRequestSummary) ([]byte, error) {
+				owner := strings.TrimSpace(selectedPR.RepoOwner)
+				repo := strings.TrimSpace(selectedPR.RepoName)
+
+				payloads, err := fetcher.FetchComments(ctx, owner, repo, selectedPR.Number)
+				if err != nil {
+					return nil, fmt.Errorf("fetch comments: %w", err)
+				}
+
+				// Convert TUI PR summary to internal format for BuildOutput
+				internalPR := &ghprcomments.PullRequestSummary{
+					Number:    selectedPR.Number,
+					Title:     selectedPR.Title,
+					Author:    selectedPR.Author,
+					State:     selectedPR.State,
+					Created:   selectedPR.Created,
+					Updated:   selectedPR.Updated,
+					HeadRef:   selectedPR.HeadRef,
+					BaseRef:   selectedPR.BaseRef,
+					RepoName:  selectedPR.RepoName,
+					RepoOwner: selectedPR.RepoOwner,
+					URL:       selectedPR.URL,
+					LocalPath: selectedPR.LocalPath,
+				}
+
+				normOpts := ghprcomments.NormalizationOptions{
+					StripHTML: stripHTML,
+				}
+
+				output := ghprcomments.BuildOutput(internalPR, payloads, normOpts)
+				return ghprcomments.MarshalJSON(output, flat)
+			}
+
+			// Run unified flow: PR selection → loading → JSON explorer
+			selectedTUI, err := tui.RunUnifiedFlow(tuiPRs, nil, fetchCommentsFunc)
+			if err != nil {
+				return fmt.Errorf("interactive flow: %w", err)
+			}
+
+			if selectedTUI == nil {
+				return errors.New("no pull request selected")
+			}
+
+			// Convert back
+			prSummary = &ghprcomments.PullRequestSummary{
+				Number:    selectedTUI.Number,
+				Title:     selectedTUI.Title,
+				Author:    selectedTUI.Author,
+				State:     selectedTUI.State,
+				Created:   selectedTUI.Created,
+				Updated:   selectedTUI.Updated,
+				HeadRef:   selectedTUI.HeadRef,
+				BaseRef:   selectedTUI.BaseRef,
+				RepoName:  selectedTUI.RepoName,
+				RepoOwner: selectedTUI.RepoOwner,
+				URL:       selectedTUI.URL,
+				LocalPath: selectedTUI.LocalPath,
+			}
+
+			// Interactive flow complete - we're done!
+			return nil
+		} else {
+			prSummary, err = ghprcomments.SelectPullRequestWithOptions(ctx, all, in, out, ghprcomments.SelectPromptOptions{Colorize: colorEnabled})
+			if err != nil {
+				return fmt.Errorf("select pull request: %w", err)
+			}
 		}
 		selectedRepo = repoLookup[repoKey(prSummary.RepoOwner, prSummary.RepoName)]
 		if selectedRepo.Path == "" {
@@ -314,6 +443,16 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("marshal JSON: %w", err)
 		}
+
+		// Launch interactive JSON explorer by default when interactive mode is enabled
+		if useInteractive {
+			if err := tui.ExploreJSON(payload); err != nil {
+				return fmt.Errorf("explore JSON: %w", err)
+			}
+			return nil
+		}
+
+		// Non-interactive: output to stdout
 		display := payload
 		if colorEnabled {
 			display = ghprcomments.ColouriseJSONComments(colorEnabled, payload)
