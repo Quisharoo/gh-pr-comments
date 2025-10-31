@@ -25,18 +25,18 @@ const (
 
 // UnifiedFlowModel manages the entire interactive flow without screen flashing.
 type UnifiedFlowModel struct {
-	state         FlowState
-	prSelector    PRSelectorModel
-	jsonExplorer  JSONExplorerModel
-	selectedPR    *PullRequestSummary
-	jsonData      []byte
-	err           error
-	skipPRSelect  bool
-	width         int
-	height        int
-	spinner       spinner.Model
-	loadingMsg    string
-	allowBack     bool // Whether back navigation from JSON is allowed
+	state        FlowState
+	prSelector   PRSelectorModel
+	jsonExplorer JSONExplorerModel
+	selectedPR   *PullRequestSummary
+	jsonData     []byte
+	err          error
+	skipPRSelect bool
+	width        int
+	height       int
+	spinner      spinner.Model
+	loadingMsg   string
+	allowBack    bool // Whether back navigation from JSON is allowed
 
 	// Prefetching state
 	prefetchCtx    context.Context
@@ -72,12 +72,13 @@ func NewUnifiedFlowModel(prs []*PullRequestSummary) UnifiedFlowModel {
 
 // PrefetchConfig holds the configuration for prefetching PR comments.
 type PrefetchConfig struct {
-	Ctx          context.Context
-	PRs          []*ghprcomments.PullRequestSummary
-	Fetcher      *ghprcomments.Fetcher
-	Repositories []ghprcomments.Repository
-	StripHTML    bool
-	Flat         bool
+	Ctx                context.Context
+	PRs                []*ghprcomments.PullRequestSummary
+	Fetcher            *ghprcomments.Fetcher
+	Repositories       []ghprcomments.Repository
+	RepositoriesLoader func(context.Context) ([]ghprcomments.Repository, error)
+	StripHTML          bool
+	Flat               bool
 }
 
 // NewUnifiedFlowWithPrefetch creates a new unified flow that prefetches PR comments.
@@ -96,8 +97,11 @@ func NewUnifiedFlowWithPrefetch(config PrefetchConfig) UnifiedFlowModel {
 
 	// Determine loading message
 	loadingMsg := "Loading..."
-	if len(config.PRs) > 0 {
+	switch {
+	case len(config.PRs) > 0:
 		loadingMsg = fmt.Sprintf("Loading comments for %d PRs...", len(config.PRs))
+	case len(config.Repositories) == 0 && config.RepositoriesLoader != nil:
+		loadingMsg = "Discovering repositories..."
 	}
 
 	m := UnifiedFlowModel{
@@ -118,9 +122,22 @@ func startPrefetchCmd(config PrefetchConfig) tea.Cmd {
 	return func() tea.Msg {
 		// If PRs not provided, fetch them first
 		prs := config.PRs
-		if prs == nil && len(config.Repositories) > 0 {
+		if prs == nil {
+			repos := config.Repositories
+			if len(repos) == 0 && config.RepositoriesLoader != nil {
+				loaded, err := config.RepositoriesLoader(config.Ctx)
+				if err != nil {
+					return prefetchErrorMsg{err: fmt.Errorf("detect repositories: %w", err)}
+				}
+				repos = loaded
+			}
+
+			if len(repos) == 0 {
+				return prefetchErrorMsg{err: fmt.Errorf("no repositories found")}
+			}
+
 			all := make([]*ghprcomments.PullRequestSummary, 0)
-			for _, repo := range config.Repositories {
+			for _, repo := range repos {
 				repoPRs, err := config.Fetcher.ListPullRequestSummaries(config.Ctx, repo.Owner, repo.Name)
 				if err != nil {
 					if errors.Is(err, ghprcomments.ErrNoPullRequests) {
