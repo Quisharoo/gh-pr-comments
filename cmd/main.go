@@ -224,8 +224,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		// Use interactive TUI by default, fall back to classic prompt only if disabled
 		if useInteractive {
 			// Run unified flow with prefetching and spinner
-			// TUI starts immediately with "Loading..." spinner
-			// PRs and comments are fetched inside the TUI
+			// TUI starts immediately in inline mode, then switches to alt screen when ready
 			selectedTUI, err := tui.RunUnifiedFlowWithPrefetch(tui.PrefetchConfig{
 				Ctx:          ctx,
 				PRs:          nil, // Will be fetched inside TUI
