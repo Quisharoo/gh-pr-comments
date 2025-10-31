@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 // JSONExplorerModel provides an interactive JSON viewer with fx-inspired navigation.
@@ -34,16 +35,18 @@ type JSONExplorerModel struct {
 
 // JSONNode represents a node in the JSON tree structure.
 type JSONNode struct {
-	Key        string
-	Value      interface{}
-	Type       string // "object", "array", "string", "number", "bool", "null"
-	Children   []*JSONNode
-	Parent     *JSONNode
-	Expanded   bool
-	Depth      int
-	Index      int  // Index in flatNodes
-	LineNumber int  // Display line number
-	Matches    bool // Whether this node matches current search
+	Key            string
+	Value          interface{}
+	Type           string // "object", "array", "string", "number", "bool", "null"
+	Children       []*JSONNode
+	Parent         *JSONNode
+	Expanded       bool
+	Depth          int
+	Index          int  // Index in flatNodes
+	LineNumber     int  // Display line number
+	Matches        bool // Whether this node matches current search
+	PhysicalLines  int  // Number of rendered screen lines (for multi-line wrapping)
+	PhysicalOffset int  // Cumulative physical line offset from top
 }
 
 // KeyMap defines keybindings for the JSON explorer.
@@ -482,14 +485,19 @@ func (m JSONExplorerModel) View() string {
 }
 
 // renderTree generates the visual tree representation.
+// Also computes physical line offsets for each node to support proper scrolling.
 func (m JSONExplorerModel) renderTree() string {
 	var b strings.Builder
+	physicalOffset := 0
 
 	for i, node := range m.flatNodes {
 		// Skip nodes that don't match filter
 		if m.filterActive && !node.Matches && !hasMatchingChild(node) {
 			continue
 		}
+
+		// Record physical offset for this node
+		node.PhysicalOffset = physicalOffset
 
 		// Indentation
 		indent := strings.Repeat("  ", node.Depth)
@@ -538,6 +546,9 @@ func (m JSONExplorerModel) renderTree() string {
 
 		// Render value preview with wrapping
 		valueLines := m.renderValue(node, i == m.cursor, prefixWidth)
+		lineCount := max(1, len(valueLines))
+		node.PhysicalLines = lineCount
+
 		if len(valueLines) > 0 {
 			b.WriteString(valueLines[0])
 			b.WriteString("\n")
@@ -551,6 +562,9 @@ func (m JSONExplorerModel) renderTree() string {
 		} else {
 			b.WriteString("\n")
 		}
+
+		// Update physical offset for next node
+		physicalOffset += lineCount
 	}
 
 	return b.String()
@@ -694,14 +708,31 @@ func hasMatchingChild(node *JSONNode) bool {
 }
 
 // ensureCursorVisible scrolls viewport to keep cursor in view.
+// Uses physical line offsets to handle multi-line wrapped entries correctly.
 func (m *JSONExplorerModel) ensureCursorVisible() {
-	lineHeight := 1
-	cursorY := m.cursor * lineHeight
+	if m.cursor < 0 || m.cursor >= len(m.flatNodes) {
+		return
+	}
 
+	// Get physical line position of cursor
+	cursorNode := m.flatNodes[m.cursor]
+	cursorY := cursorNode.PhysicalOffset
+
+	// Scroll up if cursor is above viewport
 	if cursorY < m.viewport.YOffset {
 		m.viewport.SetYOffset(cursorY)
-	} else if cursorY >= m.viewport.YOffset+m.viewport.Height {
-		m.viewport.SetYOffset(cursorY - m.viewport.Height + lineHeight)
+	}
+	// Scroll down if cursor is below viewport (accounting for multi-line entries)
+	cursorBottom := cursorY + cursorNode.PhysicalLines - 1
+	viewportBottom := m.viewport.YOffset + m.viewport.Height - 1
+
+	if cursorBottom > viewportBottom {
+		// Position cursor at bottom of viewport
+		newOffset := cursorBottom - m.viewport.Height + 1
+		if newOffset < 0 {
+			newOffset = 0
+		}
+		m.viewport.SetYOffset(newOffset)
 	}
 }
 
@@ -721,20 +752,6 @@ func collapseAll(node *JSONNode) {
 	}
 }
 
-// Helper functions for min/max
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 // ExploreJSON launches an interactive JSON explorer.
 func ExploreJSON(jsonData []byte) error {
@@ -827,43 +844,46 @@ func openBrowser(url string) error {
 }
 
 // wrapString wraps a string to fit within the specified width.
-// It tries to break at word boundaries when possible.
+// It uses muesli/reflow for robust word wrapping, but preserves leading/trailing whitespace.
 func wrapString(s string, width int) []string {
 	if width <= 0 {
 		return []string{s}
 	}
 
-	// If string fits, return as-is
-	if len(s) <= width {
+	// Measure leading/trailing whitespace before wrapping
+	originalLeading := len(s) - len(strings.TrimLeft(s, " \t"))
+	originalTrailing := len(s) - len(strings.TrimRight(s, " \t"))
+
+	// Wrap the string
+	wrapped := wordwrap.String(s, width)
+	lines := strings.Split(wrapped, "\n")
+
+	if len(lines) == 0 {
 		return []string{s}
 	}
 
-	var lines []string
-	remaining := s
-
-	for len(remaining) > 0 {
-		if len(remaining) <= width {
-			lines = append(lines, remaining)
-			break
-		}
-
-		// Try to break at a word boundary
-		breakPoint := width
-		for i := width; i > width/2 && i < len(remaining); i-- {
-			if remaining[i] == ' ' || remaining[i] == '\t' || remaining[i] == '\n' {
-				breakPoint = i
-				break
+	// Check if wordwrap preserved leading spaces
+	if originalLeading > 0 && len(lines) > 0 {
+		actualLeading := len(lines[0]) - len(strings.TrimLeft(lines[0], " \t"))
+		if actualLeading < originalLeading {
+			// wordwrap trimmed some leading spaces, restore them
+			missingSpaces := s[:originalLeading-actualLeading]
+			if len(missingSpaces)+len(lines[0]) >= width {
+				// Can't fit, return original
+				return []string{s}
 			}
+			lines[0] = missingSpaces + lines[0]
 		}
+	}
 
-		// If we found a good break point, use it
-		if breakPoint < len(remaining) && (remaining[breakPoint] == ' ' || remaining[breakPoint] == '\t' || remaining[breakPoint] == '\n') {
-			lines = append(lines, remaining[:breakPoint])
-			remaining = strings.TrimLeft(remaining[breakPoint+1:], " \t\n")
-		} else {
-			// Hard break at width
-			lines = append(lines, remaining[:width])
-			remaining = remaining[width:]
+	// Check if wordwrap preserved trailing spaces
+	if originalTrailing > 0 && len(lines) > 0 {
+		lastLine := lines[len(lines)-1]
+		actualTrailing := len(lastLine) - len(strings.TrimRight(lastLine, " \t"))
+		if actualTrailing < originalTrailing {
+			// wordwrap trimmed trailing spaces, restore them
+			suffix := s[len(s)-originalTrailing+actualTrailing:]
+			lines[len(lines)-1] = lastLine + suffix
 		}
 	}
 
