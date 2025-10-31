@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
-	"github.com/Quish-Labs/gh-pr-comments/internal/tui"
+	ghprcomments "github.com/Quisharoo/gh-pr-comments/internal"
+	"github.com/Quisharoo/gh-pr-comments/internal/tui"
 	"github.com/google/go-github/v61/github"
 	"golang.org/x/term"
 )
