@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
-	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
+	ghprcomments "github.com/Quisharoo/gh-pr-comments/internal"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/go-github/v61/github"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -138,6 +140,7 @@ func startPrefetchCmd(config PrefetchConfig) tea.Cmd {
 			}
 
 			all := make([]*ghprcomments.PullRequestSummary, 0)
+			var fatalErr error
 			for _, repo := range repos {
 				repoPRs, err := config.Fetcher.ListPullRequestSummaries(config.Ctx, repo.Owner, repo.Name)
 				if err != nil {
@@ -145,9 +148,20 @@ func startPrefetchCmd(config PrefetchConfig) tea.Cmd {
 						// Ignore repos with no PRs
 						continue
 					}
-					// Other errors are fatal
-					return prefetchErrorMsg{err: fmt.Errorf("list PRs for %s/%s: %w", repo.Owner, repo.Name, err)}
+					// Check if it's a 404 - skip repositories that don't exist or are inaccessible
+					var ghErr *github.ErrorResponse
+					if errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == http.StatusNotFound {
+						// Skip inaccessible repositories (they may be private or deleted)
+						continue
+					}
+					// Other errors are fatal - but only return if all repos failed
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("list PRs for %s/%s: %w", repo.Owner, repo.Name, err)
+					}
+					continue
 				}
+				// Clear fatal error if we successfully got PRs from at least one repo
+				fatalErr = nil
 				for _, pr := range repoPRs {
 					if pr.RepoOwner == "" {
 						pr.RepoOwner = repo.Owner
@@ -158,6 +172,10 @@ func startPrefetchCmd(config PrefetchConfig) tea.Cmd {
 					pr.LocalPath = repo.Path
 				}
 				all = append(all, repoPRs...)
+			}
+			// If we have a fatal error and no PRs, return it
+			if fatalErr != nil && len(all) == 0 {
+				return prefetchErrorMsg{err: fatalErr}
 			}
 			prs = all
 		}
