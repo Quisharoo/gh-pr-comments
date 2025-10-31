@@ -6,6 +6,17 @@ Added two new user-requested features to the unified TUI flow:
 1. **Loading spinner** - Shows a minimal animated spinner during long operations (infrastructure added, not yet used)
 2. **Back navigation** - Allows users to go back from JSON comments view to PR list using `q`
 
+## Implementation Overview
+
+The spinner integration required moving the prefetching logic from [main.go](cmd/main.go) into the TUI layer. Here's how it works:
+
+1. **Main.go** calls `tui.RunUnifiedFlowWithPrefetch()` with a `PrefetchConfig`
+2. **UnifiedFlowModel** starts in `StateLoading` with the spinner visible
+3. **Init()** returns two commands: `spinner.Tick` (for animation) and `startPrefetchCmd` (background goroutine)
+4. **startPrefetchCmd** runs prefetching in parallel (max 4 workers) and sends `prefetchCompleteMsg` when done
+5. **Update()** receives `prefetchCompleteMsg` and transitions to `StateSelectingPR`
+6. User can now browse PRs and navigate back using `q`
+
 ## Changes Made
 
 ### File: internal/tui/unified_flow.go
@@ -13,9 +24,15 @@ Added two new user-requested features to the unified TUI flow:
 #### 1. New Imports
 ```go
 import (
+    "context"
+    "fmt"
+    "strings"
+
+    ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
     "github.com/charmbracelet/bubbles/spinner"
     tea "github.com/charmbracelet/bubbletea"
     "github.com/charmbracelet/lipgloss"
+    "golang.org/x/sync/errgroup"
 )
 ```
 
@@ -24,9 +41,33 @@ import (
 type UnifiedFlowModel struct {
     state         FlowState
     // ... existing fields ...
-    spinner       spinner.Model  // NEW: Spinner for loading state
-    loadingMsg    string          // NEW: Optional custom loading message
-    allowBack     bool            // NEW: Whether back navigation is allowed
+    spinner       spinner.Model     // NEW: Spinner for loading state
+    loadingMsg    string             // NEW: Optional custom loading message
+    allowBack     bool               // NEW: Whether back navigation is allowed
+
+    // NEW: Prefetching state
+    prefetchCtx    context.Context
+    prefetchCancel context.CancelFunc
+    prefetchConfig *PrefetchConfig
+}
+
+// NEW: Message types for prefetching
+type prefetchCompleteMsg struct {
+    prs  []*PullRequestSummary
+    errs []error
+}
+
+type prefetchErrorMsg struct {
+    err error
+}
+
+// NEW: Config for prefetching
+type PrefetchConfig struct {
+    Ctx       context.Context
+    PRs       []*ghprcomments.PullRequestSummary
+    Fetcher   *ghprcomments.Fetcher
+    StripHTML bool
+    Flat      bool
 }
 ```
 
@@ -195,21 +236,23 @@ When going back, both the JSON explorer and PR selector states are reset:
 
 ## Usage Scenarios
 
-### Scenario 1: Normal PR browsing flow with back navigation
+### Scenario 1: Normal PR browsing flow with spinner and back navigation
 ```
 1. User runs: gh pr-comments
-2. (Comments are prefetched for all PRs in parallel)
-3. State: StateSelectingPR → Shows PR list
-4. User selects PR #42
-5. State: StateExploringJSON → Shows PR #42 comments (allowBack=true)
-6. User presses 'q'
-7. State: StateSelectingPR → Back to PR list (PR selector state reset)
-8. User selects PR #99
-9. State: StateExploringJSON → Shows PR #99 comments (allowBack=true)
-10. User presses 'q'
-11. State: StateSelectingPR → Back to PR list
-12. User presses 'q' in PR list
-13. State: StateQuitting → Exit
+2. State: StateLoading → Shows spinner "Loading comments for 5 PRs..."
+3. (Comments are prefetched for all PRs in parallel in background)
+4. Prefetching completes
+5. State: StateSelectingPR → Shows PR list
+6. User selects PR #42
+7. State: StateExploringJSON → Shows PR #42 comments (allowBack=true)
+8. User presses 'q'
+9. State: StateSelectingPR → Back to PR list (PR selector state reset)
+10. User selects PR #99
+11. State: StateExploringJSON → Shows PR #99 comments (allowBack=true)
+12. User presses 'q'
+13. State: StateSelectingPR → Back to PR list
+14. User presses 'q' in PR list
+15. State: StateQuitting → Exit
 ```
 
 ### Scenario 2: Direct JSON view (no back navigation)
@@ -220,24 +263,12 @@ When going back, both the JSON explorer and PR selector states are reset:
 4. State: StateQuitting → Exit (can't go back, no PR list)
 ```
 
-### Scenario 3: Loading state (not currently used, but infrastructure ready)
+### Scenario 3: Force quit during loading
 ```
-Currently, comments are prefetched BEFORE the TUI starts, so there's no loading state during the interactive session.
-
-However, the StateLoading infrastructure is in place and could be used in the future for:
-- Showing spinner while fetching PRs initially
-- Lazy loading comments on-demand instead of prefetching
-- Refreshing comment data for a PR
-
-Example future flow:
 1. User runs: gh pr-comments
-2. State: StateLoading → Shows spinner "Loading PRs..."
-3. PRs fetched
-4. State: StateSelectingPR → Shows PR list
-5. User selects PR #42
-6. State: StateLoading → Shows spinner "Fetching comments..."
-7. Comments ready
-8. State: StateExploringJSON → Shows comments
+2. State: StateLoading → Shows spinner "Loading comments for 5 PRs..."
+3. User presses ctrl+c
+4. State: StateQuitting → Exit immediately (context cancelled, prefetch stops)
 ```
 
 ## Testing
@@ -279,36 +310,30 @@ ok  	github.com/Quish-Labs/gh-pr-comments/internal/tui	(cached)
 
 ## Current Status
 
-### What Works
-- ✅ Back navigation: Press `q` in JSON view to return to PR list
-- ✅ State management: PR selector properly resets when returning
-- ✅ Force quit: ctrl+c works at any time to exit
-- ✅ Memory management: JSON explorer is cleared when going back
+### What Works ✅
+- ✅ **Loading spinner**: Shows animated dot spinner while prefetching PR comments
+- ✅ **Back navigation**: Press `q` in JSON view to return to PR list
+- ✅ **State management**: PR selector properly resets when returning
+- ✅ **Force quit**: ctrl+c works at any time to exit
+- ✅ **Memory management**: JSON explorer is cleared when going back
+- ✅ **Background prefetching**: Comments are fetched in parallel (max 4 workers) while spinner animates
 
-### What's Not Used (Yet)
-- ⏸️ Loading spinner: Infrastructure is complete but not integrated
-  - Comments are prefetched BEFORE TUI starts (in main.go lines 278-352)
-  - No loading happens during the interactive session
-  - StateLoading is defined but never transitioned to
-
-### Why No Spinner?
-Looking at [main.go:278-352](cmd/main.go#L278-L352), the prefetching happens in a blocking manner using `errgroup.Wait()` before `tui.RunUnifiedFlow()` is called. The TUI only starts after all comments are already fetched, so there's nothing to show a spinner for during the interactive session.
+### How It Works
+The TUI now starts immediately in `StateLoading` and shows a spinner with the message "Loading comments for N PRs..." while prefetching happens in a background goroutine. Once prefetching completes, it transitions to `StateSelectingPR` with the PR list.
 
 ## Future Enhancements
 
-1. **Integrate loading spinner:** To actually use the spinner, would need to:
-   - Move prefetching logic INSIDE the TUI (into UnifiedFlowModel)
-   - Start TUI immediately after fetching PR list
-   - Show spinner while comments are being prefetched in background
-   - Transition to PR selector once prefetching completes
+1. **Progress indicators:** Show count of PRs completed (e.g., "Loading comments... 3/10")
 
-2. **Per-PR loading indicators:** Could show individual spinner/status for each PR as its comments are prefetched
+2. **Per-PR loading status:** Show which PRs are being fetched in real-time
 
-3. **Lazy loading:** Instead of prefetching all PRs, could fetch comments on-demand when user selects a PR (with spinner during fetch)
+3. **Lazy loading option:** Add flag to fetch comments on-demand when user selects a PR (faster startup)
 
 4. **Back navigation hints:** Show "Press q to go back" in footer when `allowBack` is true
 
 5. **Transition animations:** Smooth fade transitions between states
+
+6. **Retry mechanism:** Automatic retry for failed comment fetches with exponential backoff
 
 ## Related Files
 

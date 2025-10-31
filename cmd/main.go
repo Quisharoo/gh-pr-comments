@@ -15,7 +15,6 @@ import (
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
 	"github.com/Quish-Labs/gh-pr-comments/internal/tui"
 	"github.com/google/go-github/v61/github"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -222,6 +221,32 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return nil
 		}
 	} else {
+		// Use interactive TUI by default, fall back to classic prompt only if disabled
+		if useInteractive {
+			// Run unified flow with prefetching and spinner
+			// TUI starts immediately with "Loading..." spinner
+			// PRs and comments are fetched inside the TUI
+			selectedTUI, err := tui.RunUnifiedFlowWithPrefetch(tui.PrefetchConfig{
+				Ctx:          ctx,
+				PRs:          nil, // Will be fetched inside TUI
+				Repositories: repos,
+				Fetcher:      fetcher,
+				StripHTML:    stripHTML,
+				Flat:         flat,
+			})
+			if err != nil {
+				return fmt.Errorf("interactive flow: %w", err)
+			}
+
+			if selectedTUI == nil {
+				return errors.New("no pull request selected")
+			}
+
+			// Interactive flow complete - we're done!
+			return nil
+		}
+
+		// Non-interactive mode: fetch PR list first, then use classic prompt
 		all := make([]*ghprcomments.PullRequestSummary, 0)
 		var errs []string
 		for _, repo := range repos {
@@ -273,114 +298,6 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 		}
 
-		// Use interactive TUI by default, fall back to classic prompt only if disabled
-		if useInteractive {
-			// Prefetch comments for all PRs
-			type prefetchResult struct {
-				pr    *tui.PullRequestSummary
-				warn  error
-				index int
-			}
-
-			results := make([]prefetchResult, len(all))
-			for i := range results {
-				results[i].index = i
-			}
-
-			workerLimit := 4
-			if len(all) < workerLimit {
-				workerLimit = len(all)
-			}
-			if workerLimit == 0 {
-				workerLimit = 1
-			}
-
-			sem := make(chan struct{}, workerLimit)
-			prefetchGroup, groupCtx := errgroup.WithContext(ctx)
-
-			for i, pr := range all {
-				i, pr := i, pr
-				prefetchGroup.Go(func() error {
-					select {
-					case sem <- struct{}{}:
-					case <-groupCtx.Done():
-						return groupCtx.Err()
-					}
-					defer func() { <-sem }()
-
-					owner := strings.TrimSpace(pr.RepoOwner)
-					repo := strings.TrimSpace(pr.RepoName)
-
-					payloads, err := fetcher.FetchComments(groupCtx, owner, repo, pr.Number)
-					if err != nil {
-						results[i].warn = fmt.Errorf("failed to fetch comments for %s/%s#%d: %w", owner, repo, pr.Number, err)
-						return nil
-					}
-
-					normOpts := ghprcomments.NormalizationOptions{
-						StripHTML: stripHTML,
-					}
-
-					output := ghprcomments.BuildOutput(pr, payloads, normOpts)
-					jsonData, err := ghprcomments.MarshalJSON(output, flat)
-					if err != nil {
-						results[i].warn = fmt.Errorf("failed to marshal JSON for %s/%s#%d: %w", owner, repo, pr.Number, err)
-						return nil
-					}
-
-					results[i].pr = &tui.PullRequestSummary{
-						Number:       pr.Number,
-						Title:        pr.Title,
-						Author:       pr.Author,
-						State:        pr.State,
-						Created:      pr.Created,
-						Updated:      pr.Updated,
-						HeadRef:      pr.HeadRef,
-						BaseRef:      pr.BaseRef,
-						RepoName:     pr.RepoName,
-						RepoOwner:    pr.RepoOwner,
-						URL:          pr.URL,
-						LocalPath:    pr.LocalPath,
-						CommentsJSON: jsonData,
-					}
-					return nil
-				})
-			}
-
-			if err := prefetchGroup.Wait(); err != nil {
-				return err
-			}
-
-			validPRs := make([]*tui.PullRequestSummary, 0, len(results))
-			for _, res := range results {
-				if res.warn != nil {
-					fmt.Fprintf(errOut, "warning: %v\n", res.warn)
-					continue
-				}
-				if res.pr != nil {
-					validPRs = append(validPRs, res.pr)
-				}
-			}
-
-			if len(validPRs) == 0 {
-				return errors.New("no PRs with comments available")
-			}
-
-			// Run unified flow: PR selection → JSON explorer (no loading!)
-			selectedTUI, err := tui.RunUnifiedFlow(validPRs, nil)
-			if err != nil {
-				return fmt.Errorf("interactive flow: %w", err)
-			}
-
-			if selectedTUI == nil {
-				return errors.New("no pull request selected")
-			}
-
-			// Interactive flow complete - we're done!
-			return nil
-		}
-
-		// Non-interactive mode: use classic prompt
 		prSummary, err = ghprcomments.SelectPullRequestWithOptions(ctx, all, in, out, ghprcomments.SelectPromptOptions{Colorize: colorEnabled})
 		if err != nil {
 			return fmt.Errorf("select pull request: %w", err)
