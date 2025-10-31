@@ -350,12 +350,7 @@ func (m JSONExplorerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.flatNodes) {
 				node := m.flatNodes[m.cursor]
 
-				// First check if this node contains a URL
-				urlToOpen := m.extractURL(node)
-				if urlToOpen != "" {
-					// Open URL instead of expanding
-					go openBrowser(urlToOpen)
-				} else if len(node.Children) > 0 {
+				if len(node.Children) > 0 {
 					// Toggle expand/collapse for objects/arrays
 					node.Expanded = !node.Expanded
 					m.flatNodes = flattenTree(m.tree)
@@ -752,7 +747,6 @@ func collapseAll(node *JSONNode) {
 	}
 }
 
-
 // ExploreJSON launches an interactive JSON explorer.
 func ExploreJSON(jsonData []byte) error {
 	model, err := NewJSONExplorerModel(jsonData)
@@ -814,9 +808,9 @@ func (m JSONExplorerModel) extractURL(node *JSONNode) string {
 	// Check if key suggests it's a URL (permalink, url, link, etc.)
 	keyLower := strings.ToLower(node.Key)
 	if strings.Contains(keyLower, "url") ||
-	   strings.Contains(keyLower, "link") ||
-	   strings.Contains(keyLower, "permalink") ||
-	   strings.Contains(keyLower, "href") {
+		strings.Contains(keyLower, "link") ||
+		strings.Contains(keyLower, "permalink") ||
+		strings.Contains(keyLower, "href") {
 		if urlPattern.MatchString(valueStr) {
 			return urlPattern.FindString(valueStr)
 		}

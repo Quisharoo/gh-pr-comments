@@ -110,6 +110,10 @@ func NewPRSelectorModel(prs []*PullRequestSummary) PRSelectorModel {
 				key.WithKeys("enter"),
 				key.WithHelp("enter", "select"),
 			),
+			key.NewBinding(
+				key.WithKeys("o"),
+				key.WithHelp("o", "open in browser"),
+			),
 		}
 	}
 	l.AdditionalFullHelpKeys = func() []key.Binding {
@@ -117,6 +121,10 @@ func NewPRSelectorModel(prs []*PullRequestSummary) PRSelectorModel {
 			key.NewBinding(
 				key.WithKeys("enter"),
 				key.WithHelp("enter", "select PR"),
+			),
+			key.NewBinding(
+				key.WithKeys("o"),
+				key.WithHelp("o", "open PR in browser"),
 			),
 		}
 	}
@@ -145,6 +153,14 @@ func (m PRSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q", "esc":
 			m.quitting = true
 			return m, tea.Quit
+
+		case "o":
+			selectedItem := m.list.SelectedItem()
+			if selectedItem != nil {
+				if item, ok := selectedItem.(prItem); ok && item.pr.URL != "" {
+					go openBrowser(item.pr.URL)
+				}
+			}
 
 		case "enter":
 			selectedItem := m.list.SelectedItem()

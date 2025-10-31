@@ -39,11 +39,12 @@ gh pr-comments --pr 123
 - `↑`/`↓` or `j`/`k` - Navigate through PRs
 - `/` - Fuzzy search by repo, number, or title
 - `Enter` - Select PR
+- `o` - Open selected PR in browser
 - `q` or `Esc` - Quit
 
 **Interactive JSON Explorer (fx-style):**
 - `j`/`k` or `↑`/`↓` - Navigate nodes
-- `Enter`, `l`, or `→` - Open URL (if value is URL) or toggle expand/collapse
+- `Enter`, `l`, or `→` - Toggle expand/collapse
 - `h` or `←` - Collapse (or collapse parent if already collapsed)
 - `y` or `c` - Copy highlighted value to clipboard
 - `o` - Open URL in browser (for URL values)
