@@ -1,0 +1,13 @@
+{
+  "type": "REVIEW_COMMENT",
+  "author": "testuser",
+  "repo": "owner/repo",
+  "number": 123,
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-02T00:00:00Z",
+  "head_ref": "feature-branch",
+  "base_ref": "main",
+  "body_text": "This looks good! Here is some `inline code`.",
+  "permalink": "https://github.com/owner/repo/pull/123#discussion_r1",
+  "url": "https://api.github.com/repos/owner/repo/pulls/123"
+}

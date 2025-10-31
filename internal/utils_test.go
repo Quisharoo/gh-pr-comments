@@ -25,6 +25,16 @@ func TestStripHTML(t *testing.T) {
 		{"no_html", "plain text", "plain text"},
 		{"paragraphs", "<p>hello</p>", "hello"},
 		{"line_breaks", "first<br>second", "first\nsecond"},
+		{"br_with_slash", "first<br/>second", "first\nsecond"},
+		{"br_with_space", "first<br />second", "first\nsecond"},
+		{"uppercase_br", "first<BR>second", "first\nsecond"},
+		{"nested_tags", "<div><p><strong>bold</strong></p></div>", "bold"},
+		{"malformed_html", "<p>unclosed<div>tags", "unclosedtags"},
+		{"html_entities", "&lt;div&gt;", "&lt;div&gt;"}, // bluemonday preserves entities (correct behavior)
+		{"script_tag", "<script>alert('xss')</script>text", "text"},
+		{"multiple_br", "line1<br>line2<br/>line3<br />line4", "line1\nline2\nline3\nline4"},
+		{"empty_string", "", ""},
+		{"attributes", "<p class='foo' id='bar'>text</p>", "text"},
 	}
 
 	for _, tt := range tests {
@@ -34,6 +44,17 @@ func TestStripHTML(t *testing.T) {
 				t.Fatalf("StripHTML(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// Benchmark to ensure bluemonday isn't significantly slower
+func BenchmarkStripHTML(b *testing.B) {
+	input := `<div class="comment"><p>This is a <strong>test</strong> comment with <br> some HTML.<br/>
+	It has multiple lines<br />and various tags like <a href="test">links</a> and <code>code blocks</code>.</p></div>`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		StripHTML(input)
 	}
 }
 
@@ -230,12 +251,12 @@ func TestSelectWithPromptColourizedOutput(t *testing.T) {
 	repoDisplay := formatRepoDisplay(prs[0], includeOwner)
 
 	expectedLine := fmt.Sprintf("%s %s%s - %s %s %s\n",
-		applyStyle(true, ansiDim, "[1]"),
-		applyStyle(true, ansiBrightCyan, repoDisplay),
-		applyStyle(true, ansiYellow, "#10"),
+		renderStyle(true, prDimStyle, "[1]"),
+		renderStyle(true, prRepoStyle, repoDisplay),
+		renderStyle(true, prNumberStyle, "#10"),
 		"Colourful",
-		applyStyle(true, ansiMagenta, "[feature\u2192main]"),
-		applyStyle(true, ansiDim, "updated 2025-10-24 12:00Z"),
+		renderStyle(true, prBranchStyle, "[feature\u2192main]"),
+		renderStyle(true, prDimStyle, "updated 2025-10-24 12:00Z"),
 	)
 
 	expected := expectedLine + "Select by index, PR number, or owner/repo#number: "
