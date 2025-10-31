@@ -17,7 +17,7 @@
 
 ## Installation
 From the repository root:
-1. `go build -o gh-pr-comments ./cmd`
+1. `go build -trimpath -o gh-pr-comments ./cmd`
 2. `gh extension install .`
 
 `gh extension install .` copies the freshly built binary into the extension’s install directory. After installation you can optionally remove the workspace copy with `rm gh-pr-comments`.
@@ -96,7 +96,7 @@ gh pr-comments  # Shows PRs from all repos in subdirectories
 ## Development
 - `go test ./...` to run unit tests
 - `go vet ./... && staticcheck ./...` for linting
-- `go build -o gh-pr-comments ./cmd` to produce the extension binary
+- `go build -trimpath -o gh-pr-comments ./cmd` to produce the extension binary
 
 ## Architecture
 
