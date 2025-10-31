@@ -198,17 +198,18 @@ When going back, both the JSON explorer and PR selector states are reset:
 ### Scenario 1: Normal PR browsing flow with back navigation
 ```
 1. User runs: gh pr-comments
-2. State: StateSelectingPR → Shows PR list
-3. User selects PR #42
-4. State: StateExploringJSON → Shows PR #42 comments (allowBack=true)
-5. User presses 'q'
-6. State: StateSelectingPR → Back to PR list
-7. User selects PR #99
-8. State: StateExploringJSON → Shows PR #99 comments (allowBack=true)
-9. User presses 'q'
-10. State: StateSelectingPR → Back to PR list
-11. User presses 'q' in PR list
-12. State: StateQuitting → Exit
+2. (Comments are prefetched for all PRs in parallel)
+3. State: StateSelectingPR → Shows PR list
+4. User selects PR #42
+5. State: StateExploringJSON → Shows PR #42 comments (allowBack=true)
+6. User presses 'q'
+7. State: StateSelectingPR → Back to PR list (PR selector state reset)
+8. User selects PR #99
+9. State: StateExploringJSON → Shows PR #99 comments (allowBack=true)
+10. User presses 'q'
+11. State: StateSelectingPR → Back to PR list
+12. User presses 'q' in PR list
+13. State: StateQuitting → Exit
 ```
 
 ### Scenario 2: Direct JSON view (no back navigation)
@@ -219,14 +220,22 @@ When going back, both the JSON explorer and PR selector states are reset:
 4. State: StateQuitting → Exit (can't go back, no PR list)
 ```
 
-### Scenario 3: Loading state (future use)
+### Scenario 3: Loading state (not currently used, but infrastructure ready)
 ```
+Currently, comments are prefetched BEFORE the TUI starts, so there's no loading state during the interactive session.
+
+However, the StateLoading infrastructure is in place and could be used in the future for:
+- Showing spinner while fetching PRs initially
+- Lazy loading comments on-demand instead of prefetching
+- Refreshing comment data for a PR
+
+Example future flow:
 1. User runs: gh pr-comments
 2. State: StateLoading → Shows spinner "Loading PRs..."
 3. PRs fetched
 4. State: StateSelectingPR → Shows PR list
 5. User selects PR #42
-6. State: StateLoading → Shows spinner "Fetching comments..." (if needed)
+6. State: StateLoading → Shows spinner "Fetching comments..."
 7. Comments ready
 8. State: StateExploringJSON → Shows comments
 ```
@@ -268,18 +277,38 @@ ok  	github.com/Quish-Labs/gh-pr-comments/internal/tui	(cached)
    - Clean state for next PR view
    - No visual artifacts from previous view
 
+## Current Status
+
+### What Works
+- ✅ Back navigation: Press `q` in JSON view to return to PR list
+- ✅ State management: PR selector properly resets when returning
+- ✅ Force quit: ctrl+c works at any time to exit
+- ✅ Memory management: JSON explorer is cleared when going back
+
+### What's Not Used (Yet)
+- ⏸️ Loading spinner: Infrastructure is complete but not integrated
+  - Comments are prefetched BEFORE TUI starts (in main.go lines 278-352)
+  - No loading happens during the interactive session
+  - StateLoading is defined but never transitioned to
+
+### Why No Spinner?
+Looking at [main.go:278-352](cmd/main.go#L278-L352), the prefetching happens in a blocking manner using `errgroup.Wait()` before `tui.RunUnifiedFlow()` is called. The TUI only starts after all comments are already fetched, so there's nothing to show a spinner for during the interactive session.
+
 ## Future Enhancements
 
-1. **Loading state integration:** Currently StateLoading is defined but not used. Future work could:
-   - Show spinner during PR list fetching
-   - Show spinner during comment prefetching
-   - Add custom messages for different loading operations
+1. **Integrate loading spinner:** To actually use the spinner, would need to:
+   - Move prefetching logic INSIDE the TUI (into UnifiedFlowModel)
+   - Start TUI immediately after fetching PR list
+   - Show spinner while comments are being prefetched in background
+   - Transition to PR selector once prefetching completes
 
-2. **Loading indicators in PR selector:** Could show per-PR loading indicators as comments are prefetched in parallel
+2. **Per-PR loading indicators:** Could show individual spinner/status for each PR as its comments are prefetched
 
-3. **Transition animations:** Could add smooth transitions between states (fade in/out)
+3. **Lazy loading:** Instead of prefetching all PRs, could fetch comments on-demand when user selects a PR (with spinner during fetch)
 
-4. **Back navigation breadcrumbs:** Could show "Press q to go back" hint in footer when back navigation is available
+4. **Back navigation hints:** Show "Press q to go back" in footer when `allowBack` is true
+
+5. **Transition animations:** Smooth fade transitions between states
 
 ## Related Files
 
