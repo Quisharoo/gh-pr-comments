@@ -18,11 +18,31 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/google/go-github/v61/github"
+	"github.com/microcosm-cc/bluemonday"
 )
 
-var botRegex = regexp.MustCompile(`(?i)(copilot|compliance|security|dependabot|.*\[bot\])`)
-var htmlTagRegex = regexp.MustCompile(`(?s)<[^>]+>`)
+var (
+	botRegex     = regexp.MustCompile(`(?i)(copilot|compliance|security|dependabot|.*\[bot\])`)
+	htmlStripper = bluemonday.StrictPolicy() // Strips all HTML tags
+)
+
+// Lipgloss styles for PR summary display
+var (
+	prDimStyle        = lipgloss.NewStyle().Faint(true)
+	prRepoStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	prNumberStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	prBranchStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+)
+
+// renderStyle applies a lipgloss style conditionally
+func renderStyle(enabled bool, style lipgloss.Style, text string) string {
+	if !enabled || text == "" {
+		return text
+	}
+	return style.Render(text)
+}
 
 const defaultSaveDir = ".pr-comments"
 
@@ -275,11 +295,11 @@ func selectWithPrompt(prs []*PullRequestSummary, in io.Reader, out io.Writer, op
 		branchPart := fmt.Sprintf("[%s%s%s]", headRef, arrow, baseRef)
 		updatedPart := fmt.Sprintf("updated %s", updated)
 
-		indexPart = applyStyle(opts.Colorize, ansiDim, indexPart)
-		repoPart = applyStyle(opts.Colorize, ansiBrightCyan, repoPart)
-		numberPart = applyStyle(opts.Colorize, ansiYellow, numberPart)
-		branchPart = applyStyle(opts.Colorize, ansiMagenta, branchPart)
-		updatedPart = applyStyle(opts.Colorize, ansiDim, updatedPart)
+		indexPart = renderStyle(opts.Colorize, prDimStyle, indexPart)
+		repoPart = renderStyle(opts.Colorize, prRepoStyle, repoPart)
+		numberPart = renderStyle(opts.Colorize, prNumberStyle, numberPart)
+		branchPart = renderStyle(opts.Colorize, prBranchStyle, branchPart)
+		updatedPart = renderStyle(opts.Colorize, prDimStyle, updatedPart)
 
 		fmt.Fprintf(out, "%s %s%s - %s %s %s\n",
 			indexPart,
@@ -443,15 +463,26 @@ func formatRepoDisplay(pr *PullRequestSummary, includeOwner bool) string {
 	return owner
 }
 
-// StripHTML removes HTML tags in a minimal fashion.
+// StripHTML removes HTML tags using bluemonday's strict policy.
+// Preserves <br> tags as newlines.
 func StripHTML(body string) string {
 	if body == "" {
 		return body
 	}
 
-	replacer := strings.NewReplacer("<br>", "\n", "<br/>", "\n", "<br />", "\n")
+	// Replace <br> variants with newlines before stripping
+	replacer := strings.NewReplacer(
+		"<br>", "\n",
+		"<br/>", "\n",
+		"<br />", "\n",
+		"<BR>", "\n",
+		"<BR/>", "\n",
+		"<BR />", "\n",
+	)
 	body = replacer.Replace(body)
-	return htmlTagRegex.ReplaceAllString(body, "")
+
+	// Strip all remaining HTML
+	return htmlStripper.Sanitize(body)
 }
 
 // IsBotAuthor returns true if the author matches the bot regex.
