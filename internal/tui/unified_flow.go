@@ -25,18 +25,19 @@ const (
 
 // UnifiedFlowModel manages the entire interactive flow without screen flashing.
 type UnifiedFlowModel struct {
-	state        FlowState
-	prSelector   PRSelectorModel
-	jsonExplorer JSONExplorerModel
-	selectedPR   *PullRequestSummary
-	jsonData     []byte
-	err          error
-	skipPRSelect bool
-	width        int
-	height       int
-	spinner      spinner.Model
-	loadingMsg   string
-	allowBack    bool // Whether back navigation from JSON is allowed
+	state           FlowState
+	prSelector      PRSelectorModel
+	jsonExplorer    JSONExplorerModel
+	selectedPR      *PullRequestSummary
+	jsonData        []byte
+	err             error
+	skipPRSelect    bool
+	width           int
+	height          int
+	spinner         spinner.Model
+	loadingMsg      string
+	allowBack       bool // Whether back navigation from JSON is allowed
+	altScreenActive bool // Whether we've entered the terminal alt screen
 
 	// Prefetching state
 	prefetchCtx    context.Context
@@ -259,6 +260,13 @@ func startPrefetchCmd(config PrefetchConfig) tea.Cmd {
 	}
 }
 
+func (m UnifiedFlowModel) quitCmd() tea.Cmd {
+	if m.altScreenActive {
+		return tea.Batch(tea.ExitAltScreen, tea.Quit)
+	}
+	return tea.Quit
+}
+
 // NewUnifiedFlowWithJSON creates a flow that skips PR selection and goes straight to JSON.
 func NewUnifiedFlowWithJSON(jsonData []byte) (UnifiedFlowModel, error) {
 	explorer, err := NewJSONExplorerModel(jsonData)
@@ -312,7 +320,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg, ok := msg.(tea.KeyMsg); ok {
 			if msg.String() == "ctrl+c" {
 				m.state = StateQuitting
-				return m, tea.Quit
+				return m, m.quitCmd()
 			}
 		}
 
@@ -330,7 +338,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.selectedPR.CommentsJSON) == 0 {
 					m.err = fmt.Errorf("no comments data prefetched for PR #%d", m.selectedPR.Number)
 					m.state = StateQuitting
-					return m, tea.Quit
+					return m, m.quitCmd()
 				}
 
 				// Transition directly to JSON explorer
@@ -338,7 +346,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err != nil {
 					m.err = err
 					m.state = StateQuitting
-					return m, tea.Quit
+					return m, m.quitCmd()
 				}
 
 				m.jsonExplorer = explorer
@@ -350,7 +358,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Cancelled - quit
 			m.state = StateQuitting
-			return m, tea.Quit
+			return m, m.quitCmd()
 		}
 
 		return m, cmd
@@ -362,7 +370,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(msg.prs) == 0 {
 				m.err = fmt.Errorf("no PRs with comments available")
 				m.state = StateQuitting
-				return m, tea.Quit
+				return m, m.quitCmd()
 			}
 			// Transition to PR selector with prefetched data
 			m.prSelector = NewPRSelectorModel(msg.prs)
@@ -379,6 +387,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Switch to alt screen now that we have data to show
+			m.altScreenActive = true
 			return m, tea.Batch(
 				tea.EnterAltScreen,
 				m.prSelector.Init(),
@@ -387,7 +396,7 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case prefetchErrorMsg:
 			m.err = msg.err
 			m.state = StateQuitting
-			return m, tea.Quit
+			return m, m.quitCmd()
 		}
 
 		// Update spinner
@@ -417,13 +426,13 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check if user quit (only happens when back navigation not allowed or ctrl+c)
 		if m.jsonExplorer.quitting {
 			m.state = StateQuitting
-			return m, tea.Quit
+			return m, m.quitCmd()
 		}
 
 		return m, cmd
 
 	case StateQuitting:
-		return m, tea.Quit
+		return m, m.quitCmd()
 
 	default:
 		return m, nil
