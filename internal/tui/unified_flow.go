@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
+	ghprcomments "github.com/Quisharoo/gh-pr-comments/internal"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

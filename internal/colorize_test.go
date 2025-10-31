@@ -16,7 +16,7 @@ func TestColouriseJSONCommentsDisabled(t *testing.T) {
 }
 
 func TestColouriseJSONCommentsAppliesStyles(t *testing.T) {
-	payload := []byte("{\n  \"pr\": {\n    \"repo\": \"Quish-Labs/gh-pr-comments\",\n    \"number\": 42,\n    \"url\": \"https://github.com/org/repo/pull/42\",\n    \"head_ref\": \"feature\",\n    \"base_ref\": \"main\",\n    \"updated_at\": \"2025-10-24T12:00:00Z\"\n  },\n  \"comments\": [\n    {\n      \"author\": \"octocat\",\n      \"comments\": [\n        {\n          \"type\": \"review_comment\",\n          \"created_at\": \"2025-10-23T12:34:56Z\",\n          \"body_text\": \"use `fmt` please\",\n          \"permalink\": \"https://example.test/path\"\n        }\n      ]\n    }\n  ]\n}\n")
+	payload := []byte("{\n  \"pr\": {\n    \"repo\": \"Quisharoo/gh-pr-comments\",\n    \"number\": 42,\n    \"url\": \"https://github.com/org/repo/pull/42\",\n    \"head_ref\": \"feature\",\n    \"base_ref\": \"main\",\n    \"updated_at\": \"2025-10-24T12:00:00Z\"\n  },\n  \"comments\": [\n    {\n      \"author\": \"octocat\",\n      \"comments\": [\n        {\n          \"type\": \"review_comment\",\n          \"created_at\": \"2025-10-23T12:34:56Z\",\n          \"body_text\": \"use `fmt` please\",\n          \"permalink\": \"https://example.test/path\"\n        }\n      ]\n    }\n  ]\n}\n")
 
 	coloured := string(ColouriseJSONComments(true, payload))
 
