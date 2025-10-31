@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
@@ -112,14 +113,6 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		return errors.New("GH_TOKEN or GITHUB_TOKEN not set; run `gh auth login`")
 	}
 
-	repos, err := ghprcomments.DetectRepositories(ctx)
-	if err != nil {
-		return fmt.Errorf("detect repositories: %w", err)
-	}
-	if len(repos) == 0 {
-		return errors.New("no repositories found; run inside or alongside a git repository")
-	}
-
 	client, err := ghprcomments.NewGitHubClient(ctx, token, host)
 	if err != nil {
 		return fmt.Errorf("create GitHub client: %w", err)
@@ -129,8 +122,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 
 	var prSummary *ghprcomments.PullRequestSummary
 	var selectedRepo ghprcomments.Repository
-
-	repoLookup := make(map[string]ghprcomments.Repository)
+	var repos []ghprcomments.Repository
+	var repoLookup map[string]ghprcomments.Repository
+	var reposOnce sync.Once
+	var reposErr error
 	repoKey := func(owner, name string) string {
 		owner = strings.ToLower(strings.TrimSpace(owner))
 		name = strings.ToLower(strings.TrimSpace(name))
@@ -143,11 +138,34 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		return owner + "/" + name
 	}
 
-	for _, repo := range repos {
-		repoLookup[repoKey(repo.Owner, repo.Name)] = repo
+	loadRepositories := func(c context.Context) ([]ghprcomments.Repository, error) {
+		reposOnce.Do(func() {
+			ctxToUse := c
+			if ctxToUse == nil {
+				ctxToUse = ctx
+			}
+			repos, reposErr = ghprcomments.DetectRepositories(ctxToUse)
+			if reposErr != nil {
+				return
+			}
+
+			repoLookup = make(map[string]ghprcomments.Repository, len(repos))
+			for _, repo := range repos {
+				repoLookup[repoKey(repo.Owner, repo.Name)] = repo
+			}
+		})
+		return repos, reposErr
 	}
 
 	if prNumber > 0 {
+		repos, err = loadRepositories(ctx)
+		if err != nil {
+			return fmt.Errorf("detect repositories: %w", err)
+		}
+		if len(repos) == 0 {
+			return errors.New("no repositories found; run inside or alongside a git repository")
+		}
+
 		if len(repos) == 1 {
 			selectedRepo = repos[0]
 			prSummary, err = fetcher.GetPullRequestSummary(ctx, selectedRepo.Owner, selectedRepo.Name, prNumber)
@@ -226,19 +244,19 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			// Run unified flow with prefetching and spinner
 			// TUI starts immediately in inline mode, then switches to alt screen when ready
 			selectedTUI, err := tui.RunUnifiedFlowWithPrefetch(tui.PrefetchConfig{
-				Ctx:          ctx,
-				PRs:          nil, // Will be fetched inside TUI
-				Repositories: repos,
-				Fetcher:      fetcher,
-				StripHTML:    stripHTML,
-				Flat:         flat,
+				Ctx:                ctx,
+				PRs:                nil, // Will be fetched inside TUI
+				Fetcher:            fetcher,
+				RepositoriesLoader: loadRepositories,
+				StripHTML:          stripHTML,
+				Flat:               flat,
 			})
 			if err != nil {
 				return fmt.Errorf("interactive flow: %w", err)
 			}
 
 			if selectedTUI == nil {
-				return errors.New("no pull request selected")
+				return nil
 			}
 
 			// Interactive flow complete - we're done!
@@ -246,6 +264,14 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		}
 
 		// Non-interactive mode: fetch PR list first, then use classic prompt
+		repos, err = loadRepositories(ctx)
+		if err != nil {
+			return fmt.Errorf("detect repositories: %w", err)
+		}
+		if len(repos) == 0 {
+			return errors.New("no repositories found; run inside or alongside a git repository")
+		}
+
 		all := make([]*ghprcomments.PullRequestSummary, 0)
 		var errs []string
 		for _, repo := range repos {
