@@ -10,12 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	ghprcomments "github.com/Quish-Labs/gh-pr-comments/internal"
 	"github.com/Quish-Labs/gh-pr-comments/internal/tui"
 	"github.com/google/go-github/v61/github"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -113,14 +113,6 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		return errors.New("GH_TOKEN or GITHUB_TOKEN not set; run `gh auth login`")
 	}
 
-	repos, err := ghprcomments.DetectRepositories(ctx)
-	if err != nil {
-		return fmt.Errorf("detect repositories: %w", err)
-	}
-	if len(repos) == 0 {
-		return errors.New("no repositories found; run inside or alongside a git repository")
-	}
-
 	client, err := ghprcomments.NewGitHubClient(ctx, token, host)
 	if err != nil {
 		return fmt.Errorf("create GitHub client: %w", err)
@@ -130,8 +122,10 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 
 	var prSummary *ghprcomments.PullRequestSummary
 	var selectedRepo ghprcomments.Repository
-
-	repoLookup := make(map[string]ghprcomments.Repository)
+	var repos []ghprcomments.Repository
+	var repoLookup map[string]ghprcomments.Repository
+	var reposOnce sync.Once
+	var reposErr error
 	repoKey := func(owner, name string) string {
 		owner = strings.ToLower(strings.TrimSpace(owner))
 		name = strings.ToLower(strings.TrimSpace(name))
@@ -144,11 +138,34 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 		return owner + "/" + name
 	}
 
-	for _, repo := range repos {
-		repoLookup[repoKey(repo.Owner, repo.Name)] = repo
+	loadRepositories := func(c context.Context) ([]ghprcomments.Repository, error) {
+		reposOnce.Do(func() {
+			ctxToUse := c
+			if ctxToUse == nil {
+				ctxToUse = ctx
+			}
+			repos, reposErr = ghprcomments.DetectRepositories(ctxToUse)
+			if reposErr != nil {
+				return
+			}
+
+			repoLookup = make(map[string]ghprcomments.Repository, len(repos))
+			for _, repo := range repos {
+				repoLookup[repoKey(repo.Owner, repo.Name)] = repo
+			}
+		})
+		return repos, reposErr
 	}
 
 	if prNumber > 0 {
+		repos, err = loadRepositories(ctx)
+		if err != nil {
+			return fmt.Errorf("detect repositories: %w", err)
+		}
+		if len(repos) == 0 {
+			return errors.New("no repositories found; run inside or alongside a git repository")
+		}
+
 		if len(repos) == 1 {
 			selectedRepo = repos[0]
 			prSummary, err = fetcher.GetPullRequestSummary(ctx, selectedRepo.Owner, selectedRepo.Name, prNumber)
@@ -222,6 +239,39 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			return nil
 		}
 	} else {
+		// Use interactive TUI by default, fall back to classic prompt only if disabled
+		if useInteractive {
+			// Run unified flow with prefetching and spinner
+			// TUI starts immediately in inline mode, then switches to alt screen when ready
+			selectedTUI, err := tui.RunUnifiedFlowWithPrefetch(tui.PrefetchConfig{
+				Ctx:                ctx,
+				PRs:                nil, // Will be fetched inside TUI
+				Fetcher:            fetcher,
+				RepositoriesLoader: loadRepositories,
+				StripHTML:          stripHTML,
+				Flat:               flat,
+			})
+			if err != nil {
+				return fmt.Errorf("interactive flow: %w", err)
+			}
+
+			if selectedTUI == nil {
+				return nil
+			}
+
+			// Interactive flow complete - we're done!
+			return nil
+		}
+
+		// Non-interactive mode: fetch PR list first, then use classic prompt
+		repos, err = loadRepositories(ctx)
+		if err != nil {
+			return fmt.Errorf("detect repositories: %w", err)
+		}
+		if len(repos) == 0 {
+			return errors.New("no repositories found; run inside or alongside a git repository")
+		}
+
 		all := make([]*ghprcomments.PullRequestSummary, 0)
 		var errs []string
 		for _, repo := range repos {
@@ -273,114 +323,6 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 			}
 		}
 
-		// Use interactive TUI by default, fall back to classic prompt only if disabled
-		if useInteractive {
-			// Prefetch comments for all PRs
-			type prefetchResult struct {
-				pr    *tui.PullRequestSummary
-				warn  error
-				index int
-			}
-
-			results := make([]prefetchResult, len(all))
-			for i := range results {
-				results[i].index = i
-			}
-
-			workerLimit := 4
-			if len(all) < workerLimit {
-				workerLimit = len(all)
-			}
-			if workerLimit == 0 {
-				workerLimit = 1
-			}
-
-			sem := make(chan struct{}, workerLimit)
-			prefetchGroup, groupCtx := errgroup.WithContext(ctx)
-
-			for i, pr := range all {
-				i, pr := i, pr
-				prefetchGroup.Go(func() error {
-					select {
-					case sem <- struct{}{}:
-					case <-groupCtx.Done():
-						return groupCtx.Err()
-					}
-					defer func() { <-sem }()
-
-					owner := strings.TrimSpace(pr.RepoOwner)
-					repo := strings.TrimSpace(pr.RepoName)
-
-					payloads, err := fetcher.FetchComments(groupCtx, owner, repo, pr.Number)
-					if err != nil {
-						results[i].warn = fmt.Errorf("failed to fetch comments for %s/%s#%d: %w", owner, repo, pr.Number, err)
-						return nil
-					}
-
-					normOpts := ghprcomments.NormalizationOptions{
-						StripHTML: stripHTML,
-					}
-
-					output := ghprcomments.BuildOutput(pr, payloads, normOpts)
-					jsonData, err := ghprcomments.MarshalJSON(output, flat)
-					if err != nil {
-						results[i].warn = fmt.Errorf("failed to marshal JSON for %s/%s#%d: %w", owner, repo, pr.Number, err)
-						return nil
-					}
-
-					results[i].pr = &tui.PullRequestSummary{
-						Number:       pr.Number,
-						Title:        pr.Title,
-						Author:       pr.Author,
-						State:        pr.State,
-						Created:      pr.Created,
-						Updated:      pr.Updated,
-						HeadRef:      pr.HeadRef,
-						BaseRef:      pr.BaseRef,
-						RepoName:     pr.RepoName,
-						RepoOwner:    pr.RepoOwner,
-						URL:          pr.URL,
-						LocalPath:    pr.LocalPath,
-						CommentsJSON: jsonData,
-					}
-					return nil
-				})
-			}
-
-			if err := prefetchGroup.Wait(); err != nil {
-				return err
-			}
-
-			validPRs := make([]*tui.PullRequestSummary, 0, len(results))
-			for _, res := range results {
-				if res.warn != nil {
-					fmt.Fprintf(errOut, "warning: %v\n", res.warn)
-					continue
-				}
-				if res.pr != nil {
-					validPRs = append(validPRs, res.pr)
-				}
-			}
-
-			if len(validPRs) == 0 {
-				return errors.New("no PRs with comments available")
-			}
-
-			// Run unified flow: PR selection → JSON explorer (no loading!)
-			selectedTUI, err := tui.RunUnifiedFlow(validPRs, nil)
-			if err != nil {
-				return fmt.Errorf("interactive flow: %w", err)
-			}
-
-			if selectedTUI == nil {
-				return errors.New("no pull request selected")
-			}
-
-			// Interactive flow complete - we're done!
-			return nil
-		}
-
-		// Non-interactive mode: use classic prompt
 		prSummary, err = ghprcomments.SelectPullRequestWithOptions(ctx, all, in, out, ghprcomments.SelectPromptOptions{Colorize: colorEnabled})
 		if err != nil {
 			return fmt.Errorf("select pull request: %w", err)

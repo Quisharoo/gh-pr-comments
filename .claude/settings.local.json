@@ -1,8 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./gh-pr-comments:*)",
-      "Bash(go list:*)"
+      "Bash(go doc:*)"
     ],
     "deny": [],
     "ask": []
