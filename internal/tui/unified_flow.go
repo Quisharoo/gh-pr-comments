@@ -361,7 +361,11 @@ func (m UnifiedFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.prSelector = updated.(PRSelectorModel)
 			}
 
-			return m, m.prSelector.Init()
+			// Switch to alt screen now that we have data to show
+			return m, tea.Batch(
+				tea.EnterAltScreen,
+				m.prSelector.Init(),
+			)
 
 		case prefetchErrorMsg:
 			m.err = msg.err
@@ -493,7 +497,9 @@ func RunUnifiedFlow(prs []*PullRequestSummary, jsonData []byte) (*PullRequestSum
 func RunUnifiedFlowWithPrefetch(config PrefetchConfig) (*PullRequestSummary, error) {
 	model := NewUnifiedFlowWithPrefetch(config)
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	// Start WITHOUT alt screen so spinner shows immediately in terminal
+	// We'll switch to alt screen when we transition to PR selector
+	p := tea.NewProgram(model)
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, err
