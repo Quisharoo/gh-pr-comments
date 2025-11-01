@@ -61,4 +61,5 @@ repomix-output.xml
 *.log
 
 .claude/
+.github/
 
